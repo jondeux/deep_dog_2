@@ -470,6 +470,26 @@ Common issues:
 - **Empty or partial report:** inspect `status`, `failure` and `run_metadata`, allow at least four sub-agent loops, and leave time for writing.
 - **Unexpected scope:** include the region, date range, audience and desired output in your question. The current graph does not pause to ask the user clarifying questions.
 
+## LangSmith tracing
+
+Optional and **off by default**. When enabled, the whole trajectory of a run (supervisor, sub-agents, model calls and tool calls) is sent to your own [LangSmith](https://smith.langchain.com) project as one trace named `deep_dog_2:<run_id>`. This sends prompts, search results, source text, model reasoning and reports to LangSmith, so enable it only for content you are comfortable storing there.
+
+```python
+from deep_research.integration import run_research, RunConfig, Credentials
+
+result = await run_research(
+    "Your question",
+    config=RunConfig(langsmith_tracing=True, langsmith_project="my-project"),  # project defaults to "deep-dog-2"
+    credentials=Credentials({"LANGSMITH_API_KEY": "..."}),  # per run; optional LANGSMITH_ENDPOINT
+)
+```
+
+From the CLI or a script that uses `Credentials.from_env()`, set `LANGSMITH_API_KEY` in `.env` or the environment and `langsmith_tracing=True` in the config. For an EU workspace also set `LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com`. For command-line use, `LANGSMITH_TRACING` and the other `LANGSMITH_*`/`LANGCHAIN_*` environment settings are not used or changed by this option. That does not hold for the web UI: there, an unticked run is explicitly run with tracing switched off, and an operator `LANGSMITH_WORKSPACE_ID` is not passed on with a visitor's key.
+
+If the flag is on and no key is available, `validate_credentials` reports `LANGSMITH_API_KEY` as missing and the run continues untraced. Tracing problems (bad key, network error) never fail a run: one short warning is logged and the run goes on. Traces are flushed when the run ends, waiting at most 10 seconds. The key is used only to create that run's LangSmith client; it is not stored, logged or put in trace metadata, and is redacted from trace records.
+
+In the web UI (`webui/app.py`) the **Tracing (LangSmith)** panel has the tick box, a password box for the key, a project name (default `deep-dog-2`, at most 80 characters) and a region choice (US or EU). The endpoint comes from that fixed choice, never from typed text. The key is per run and is not stored. Do not set any `LANGSMITH_*` or `LANGCHAIN_*` variable on the Space (secret or variable), in particular `LANGSMITH_API_KEY`, `LANGSMITH_ENDPOINT`, `LANGSMITH_TRACING`, `LANGSMITH_WORKSPACE_ID` and `LANGSMITH_RUNS_ENDPOINTS`: the web UI ignores the key and endpoint, but the other settings are read by the tracing libraries themselves and can send visitors' runs to your account, or make tracing fail with a warning. Error text shown on the page has every typed key replaced by `***`.
+
 ## Development
 
 From an activated environment in a [source checkout](#work-from-a-source-checkout), install the development dependencies and run the tests:

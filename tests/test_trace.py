@@ -75,6 +75,22 @@ def test_secret_values_are_redacted():
     assert "prefix-[REDACTED]" in rec.content["nested"]["k"][0]
 
 
+def test_redact_replaces_the_longest_overlapping_secret_whole():
+    from deep_research.trace import redact
+    text = "k=abcdef-SECRET-TAIL end"
+    for order in (["abcdef", "abcdef-SECRET-TAIL"], ["abcdef-SECRET-TAIL", "abcdef"]):
+        assert redact(text, order) == "k=[REDACTED] end"
+        assert redact({"a": [text]}, order) == {"a": ["k=[REDACTED] end"]}
+    full = "abcdef-SECRET-TAIL"
+    prefixes = [full[:n] for n in range(6, len(full) + 1)]
+    assert redact(f"k={full} end", prefixes) == "k=[REDACTED] end"
+    assert redact(f"k={full} end", prefixes[::-1]) == "k=[REDACTED] end"
+    # and through the Observer, whose secrets come from the credentials in dict order
+    obs = _observer(credentials=Credentials({"A": "abcdef", "B": "abcdef-SECRET-TAIL"}))
+    rec = obs.emit_trace("prompt", text=text)
+    assert rec.content["text"] == "k=[REDACTED] end"
+
+
 def test_short_values_are_not_redacted():
     # Values under 6 chars are ignored so ordinary text is not mangled.
     obs = _observer(credentials=Credentials({"X": "abc"}))

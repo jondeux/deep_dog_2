@@ -27,6 +27,10 @@ from deep_research import config as _cfg
 from deep_research.run_config import RunConfig
 
 
+# Env-supplied secrets that from_env() snapshots so the Observer can redact them.
+_REDACT_FROM_ENV = ("LANGSMITH_API_KEY",)
+
+
 @dataclass
 class Credentials:
     """Provider credentials supplied by the host application for one run.
@@ -35,14 +39,21 @@ class Credentials:
     ``"OPENROUTER_API_KEY"``, ``"TAVILY_API_KEY"``) to secret values.
     ``.get()`` falls back to the process environment, so a run that does not
     override a provider still works in deployments that set env vars.
+
+    ``langsmith_from_env=False`` (set by the web UI) stops ``LANGSMITH_*``
+    names from falling back to the process environment, so a visitor's run
+    can never be traced with, or sent to, the operator's LangSmith account.
     """
 
     keys: dict[str, str] = field(default_factory=dict)
+    langsmith_from_env: bool = True
 
     def get(self, name: str) -> Optional[str]:
         value = self.keys.get(name)
         if value:
             return value
+        if not self.langsmith_from_env and name.startswith("LANGSMITH_"):
+            return None
         return os.getenv(name)
 
     def has(self, name: str) -> bool:
@@ -50,8 +61,13 @@ class Credentials:
 
     @classmethod
     def from_env(cls) -> "Credentials":
-        """Build Credentials from the current process environment (CLI)."""
-        return cls(keys={})
+        """Build Credentials from the process environment (CLI).
+
+        ``.get()`` falls back to ``os.getenv`` anyway; the snapshot only lets
+        the Observer redact env-supplied secrets sent to third parties.
+        """
+        return cls(keys={var: secret for var in _REDACT_FROM_ENV
+                         if (secret := os.getenv(var))})
 
 
 class ModelFactory:

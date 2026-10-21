@@ -151,9 +151,14 @@ def redact(value: Any, secrets: Iterable[str]) -> Any:
     ``secrets`` should contain only non-trivial values; empty/short strings are
     ignored by the caller. Works on strings, lists and dicts (values and keys).
     """
-    secret_list = [s for s in secrets if s]
+    # Longest first, so a secret that contains a shorter one is replaced whole.
+    secret_list = sorted({s for s in secrets if s}, key=len, reverse=True)
     if not secret_list:
         return value
+    return _redact_with(value, secret_list)
+
+
+def _redact_with(value: Any, secret_list: list[str]) -> Any:
     if isinstance(value, str):
         for s in secret_list:
             if s in value:
@@ -161,11 +166,11 @@ def redact(value: Any, secrets: Iterable[str]) -> Any:
         return value
     if isinstance(value, dict):
         return {
-            redact(k, secret_list): redact(v, secret_list)
+            _redact_with(k, secret_list): _redact_with(v, secret_list)
             for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
-        return [redact(v, secret_list) for v in value]
+        return [_redact_with(v, secret_list) for v in value]
     return value
 
 

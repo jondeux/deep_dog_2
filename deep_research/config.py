@@ -63,6 +63,14 @@ Examples of model names accepted by get_model():
 #     "deepseek/deepseek-v4-pro", "xiaomi/mimo-v2.5", "meta/muse-spark-1.2"
 #   DeepSeek V4 Flash via Alibaba (Singapore): "deepseek-baba-singapore"
 #
+# HOSTED OPEN-MODEL PROVIDERS — selected ONLY by an explicit "provider:" prefix
+#   (case-insensitive); everything after the first colon is sent to the API as-is.
+#   deepinfra:<model>          env: DEEPINFRA_API_KEY   e.g. "deepinfra:deepseek-ai/DeepSeek-V3"
+#   together:<model>           env: TOGETHER_API_KEY    e.g. "together:openai/gpt-oss-120b"
+#   fireworks:<model>          env: FIREWORKS_API_KEY
+#       e.g. "fireworks:accounts/fireworks/models/llama-v3p3-70b-instruct"
+#   The prefix wins over every other rule, including ROUTE_VIA_OPENROUTER.
+#
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION VARIABLES — All knobs with their valid options.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -239,6 +247,9 @@ Examples of model names accepted by get_model():
 # Optional:
 #   OPENAI_API_KEY                       OpenAI
 #   ZHIPUAI_API_KEY                      Z.AI GLM
+#   DEEPINFRA_API_KEY                    DeepInfra ("deepinfra:<model>")
+#   TOGETHER_API_KEY                     Together AI ("together:<model>")
+#   FIREWORKS_API_KEY                    Fireworks AI ("fireworks:<model>")
 #   EXA_API_KEY                          Exa search
 #   PERPLEXITY_KEY                       Substack/Perplexity search
 #   PUBMED_EMAIL                         PubMed E-utilities contact
@@ -250,7 +261,7 @@ import contextvars
 import json
 import os
 import re
-from typing import Optional
+from typing import Callable, NamedTuple, Optional
 from langchain.chat_models import init_chat_model
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage
@@ -760,41 +771,145 @@ class credential_scope:
         return False
 
 
+class _Provider(NamedTuple):
+    """One row of the provider routing table.
+
+    ``matches(model_name, model_lower)`` decides whether a model name belongs
+    to this provider. ``env_keys`` lists the env vars whose presence makes the
+    model usable (first = primary, rest = alternative spellings). ``base_url``
+    is the OpenAI-compatible endpoint where get_model() builds the client
+    itself (None for providers built through init_chat_model / a dedicated
+    client class). ``base_url_var`` instead names a module-level constant
+    (MIMO_BASE_URL, ...) that is read at CALL time via ``_provider_base_url``,
+    so patching the constant at runtime is honoured; set at most one of the two.
+    """
+    name: str
+    matches: Callable[[str, str], bool]
+    env_keys: tuple
+    base_url: Optional[str] = None
+    base_url_var: Optional[str] = None
+
+
+# Ordered provider table: the FIRST matching row wins. This is the single
+# source of provider detection for get_model() and model_required_keys(); the
+# order encodes the precedence (e.g. "deepseek-baba-singapore" must precede the
+# generic "deepseek" row, and "meta/" must precede "muse").
+_PROVIDERS = (
+    _Provider("glm", lambda n, l: "glm" in l,
+              ("ZHIPUAI_API_KEY",), "https://api.z.ai/api/paas/v4/"),
+    _Provider("nemotron", lambda n, l: "nemotron" in l or n.startswith("nvidia/"),
+              ("OPENROUTER_API_KEY",), "https://openrouter.ai/api/v1"),
+    _Provider("deepseek-baba-singapore", lambda n, l: l == "deepseek-baba-singapore",
+              ("OPENROUTER_API_KEY",), base_url_var="OPENROUTER_BASE_URL"),
+    _Provider("deepseek", lambda n, l: "deepseek" in l,
+              ("DEEPSEEK_API_KEY", "DEEPSEEK_KEY"), "https://api.deepseek.com/v1"),
+    _Provider("mimo", lambda n, l: "mimo" in l,
+              ("MIMO_API_KEY",), base_url_var="MIMO_BASE_URL"),
+    _Provider("meta-openrouter", lambda n, l: n.startswith("meta/"),
+              ("OPENROUTER_API_KEY",), "https://openrouter.ai/api/v1"),
+    _Provider("muse", lambda n, l: "muse" in l,
+              ("META_API_KEY",), base_url_var="META_BASE_URL"),
+    _Provider("gemini", lambda n, l: "gemini" in l,
+              ("GEMINI_API_KEY", "GOOGLE_API_KEY")),
+    _Provider("openai", lambda n, l: "gpt" in l or "o1" in l or "o3" in l,
+              ("OPENAI_API_KEY",)),
+)
+
+
+def _no_name_match(model_name: str, model_lower: str) -> bool:
+    """``matches`` for prefix-only rows: they are never found by scanning."""
+    return False
+
+
+# Hosted OpenAI-compatible providers, selected ONLY by an explicit
+# "<prefix>:<model>" model name (prefix is case-insensitive). They are kept out
+# of _PROVIDERS on purpose: the prefix is resolved by one dict lookup before any
+# other rule (see _hosted_provider), so existing names never pay for these rows
+# and an id such as "together:openai/gpt-oss-120b" can never fall into the
+# substring rows above ("gpt", "deepseek", "glm", ...).
+_HOSTED_PROVIDERS = {
+    "deepinfra": _Provider("deepinfra", _no_name_match,
+                           ("DEEPINFRA_API_KEY",), "https://api.deepinfra.com/v1/openai"),
+    "together": _Provider("together", _no_name_match,
+                          ("TOGETHER_API_KEY",), "https://api.together.ai/v1"),
+    "fireworks": _Provider("fireworks", _no_name_match,
+                           ("FIREWORKS_API_KEY",), "https://api.fireworks.ai/inference/v1"),
+}
+
+
+# Lengths of the prefixes above. Callers test ``model_name.find(":")`` against
+# this set so that names whose first colon cannot end one of these prefixes
+# ("google_genai:...", "openai:...", "foo:bar") skip the split + lower() + lookup.
+_HOSTED_PREFIX_LENGTHS = frozenset(len(prefix) for prefix in _HOSTED_PROVIDERS)
+
+
+def _hosted_provider(model_name: str):
+    """``(row, model_id)`` for a ``prefix:model`` name of a hosted provider.
+
+    ``model_id`` is everything after the FIRST colon, untouched. Returns
+    ``(None, None)`` for any other name (unknown prefixes included). Callers
+    guard with ``":" in model_name and model_name.find(":") in
+    _HOSTED_PREFIX_LENGTHS`` so ordinary names skip this call entirely.
+    """
+    head, _, rest = model_name.partition(":")
+    row = _HOSTED_PROVIDERS.get(head.lower())
+    if row is None:
+        return None, None
+    return row, rest
+
+
+def _provider_base_url(provider: _Provider) -> Optional[str]:
+    """Endpoint for a provider row; module-constant rows are resolved per call."""
+    if provider.base_url_var is not None:
+        return globals()[provider.base_url_var]
+    return provider.base_url
+
+
+def _provider_api_key(provider: _Provider, model_name: str) -> str:
+    """API key for a matched provider row: the first env_keys entry that is set.
+
+    Every get_model() branch goes through this, so the keys a branch accepts are
+    exactly the row's ``env_keys`` (the same list model_required_keys() reports).
+    """
+    return _require_api_key(provider.env_keys[0], model_name, *provider.env_keys[1:])
+
+
+def _detect_provider(model_name: str, model_lower: str):
+    """First _PROVIDERS row matching the model name, or None if unknown."""
+    for provider in _PROVIDERS:
+        if provider.matches(model_name, model_lower):
+            return provider
+    return None
+
+
+def _openrouter_route_slug(model_name: str, model_lower: str):
+    """OpenRouter slug for a model routed via OpenRouter, or None if unmapped."""
+    slug = _OPENROUTER_MODEL_MAP_BY_NAME.get(model_lower)
+    if slug is None and "muse" in model_lower and not model_name.startswith("meta/"):
+        slug = f"meta/{model_name}"
+    return slug
+
+
 def model_required_keys(model_name: str, route_via_openrouter: bool = False) -> list:
     """Env-var names whose presence makes ``model_name`` usable.
 
-    Mirrors get_model()'s provider detection (including OpenRouter routing).
+    Mirrors get_model()'s provider detection (including OpenRouter routing) by
+    reading the same ``_PROVIDERS`` table.
     Returns [] for providers that need no key or are unknown (unknown providers
     are left to get_model() to raise its own mapping error).
     Alternative spellings are listed so validation can accept any of them
     (e.g. DEEPSEEK_API_KEY or DEEPSEEK_KEY).
     """
+    if ":" in model_name and model_name.find(":") in _HOSTED_PREFIX_LENGTHS:
+        # Explicit hosted-provider prefix beats every other rule, OpenRouter included.
+        hosted, _ = _hosted_provider(model_name)
+        if hosted is not None:
+            return list(hosted.env_keys)
     model_lower = model_name.lower()
-    if route_via_openrouter:
-        slug = _OPENROUTER_MODEL_MAP_BY_NAME.get(model_lower)
-        if slug is None and "muse" in model_lower and not model_name.startswith("meta/"):
-            slug = f"meta/{model_name}"
-        if slug is not None:
-            return ["OPENROUTER_API_KEY"]
-    if "glm" in model_lower:
-        return ["ZHIPUAI_API_KEY"]
-    if "nemotron" in model_lower or model_name.startswith("nvidia/"):
+    if route_via_openrouter and _openrouter_route_slug(model_name, model_lower) is not None:
         return ["OPENROUTER_API_KEY"]
-    if model_lower == "deepseek-baba-singapore":
-        return ["OPENROUTER_API_KEY"]
-    if "deepseek" in model_lower:
-        return ["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"]
-    if "mimo" in model_lower:
-        return ["MIMO_API_KEY"]
-    if model_name.startswith("meta/"):
-        return ["OPENROUTER_API_KEY"]
-    if "muse" in model_lower:
-        return ["META_API_KEY"]
-    if "gemini" in model_lower:
-        return ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
-    if "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
-        return ["OPENAI_API_KEY"]
-    return []
+    provider = _detect_provider(model_name, model_lower)
+    return list(provider.env_keys) if provider is not None else []
 
 
 def _model_key_available(model_name: str, route_via_openrouter: bool, resolver=None) -> bool:
@@ -1046,12 +1161,36 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
             )
         _effort_body = {"reasoning": {"effort": reasoning_effort}}
 
+    # Hosted providers (deepinfra:/together:/fireworks:) are chosen by an explicit
+    # prefix only, checked before the OpenRouter switch and all name detection.
+    if ":" in model_name and model_name.find(":") in _HOSTED_PREFIX_LENGTHS:
+        hosted, hosted_model = _hosted_provider(model_name)
+        if hosted is not None:
+            if not hosted_model.strip():
+                raise ValueError(
+                    f"Model name {model_name!r} has no model after the "
+                    f"{hosted.name!r} prefix. Use '{hosted.name}:<model-id>'."
+                )
+            if _effort_body:
+                _fallback_logger.warning(
+                    "reasoning_effort ignored for %s: not sent to %s (thinking "
+                    "parameters are not enabled for hosted providers yet).",
+                    model_name, hosted.name
+                )
+            kwargs = {
+                "model": hosted_model,
+                "api_key": _provider_api_key(hosted, model_name),
+                "base_url": _provider_base_url(hosted),
+                "temperature": temperature,
+            }
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            return ChatOpenAI(**kwargs)
+
     # ROUTE_VIA_OPENROUTER: send known direct-API models through OpenRouter so a
     # single OPENROUTER_API_KEY covers the supervisor chain, writers, and search.
     if _route:
-        slug = _OPENROUTER_MODEL_MAP_BY_NAME.get(model_lower)
-        if slug is None and "muse" in model_lower and not model_name.startswith("meta/"):
-            slug = f"meta/{model_name}"
+        slug = _openrouter_route_slug(model_name, model_lower)
         if slug is not None:
             api_key = _require_api_key("OPENROUTER_API_KEY", model_name)
             kwargs = {
@@ -1081,12 +1220,17 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
                 kwargs["extra_body"] = extra_body
             return ChatOpenAI(**kwargs)
 
+    # Provider detection lives in the _PROVIDERS table (shared with
+    # model_required_keys); dispatch on the matched row's name below.
+    provider = _detect_provider(model_name, model_lower)
+    _pname = provider.name if provider is not None else None
+
     # Z.AI GLM models (OpenAI-compatible API)
-    if "glm" in model_lower:
+    if _pname == "glm":
         kwargs = {
             "model": model_name,
-            "api_key": _require_api_key("ZHIPUAI_API_KEY", model_name),
-            "base_url": "https://api.z.ai/api/paas/v4/",
+            "api_key": _provider_api_key(provider, model_name),
+            "base_url": _provider_base_url(provider),
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -1094,14 +1238,14 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
         return ChatOpenAI(**kwargs)
 
     # OpenRouter-hosted Nemotron models (OpenAI-compatible API)
-    if "nemotron" in model_lower or model_name.startswith("nvidia/"):
+    if _pname == "nemotron":
         extra_body = {"provider": {"order": ["CoreWeave"]}}
         if _effort_body:
             extra_body = {**extra_body, **_effort_body}
         kwargs = {
             "model": model_name,
-            "api_key": _require_api_key("OPENROUTER_API_KEY", model_name),
-            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": _provider_api_key(provider, model_name),
+            "base_url": _provider_base_url(provider),
             "temperature": temperature,
             # Pin OpenRouter routing to CoreWeave (cheap, low-latency inference
             # for the search model; see nvidia/nemotron-3.5-lightning providers).
@@ -1113,8 +1257,8 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
 
     # DeepSeek V4 Flash hosted on OpenRouter via Alibaba Cloud (Singapore).
     # Kept as a model NAME in chains so routing pins are just chain entries.
-    if model_lower == "deepseek-baba-singapore":
-        _require_api_key("OPENROUTER_API_KEY", model_name)
+    if _pname == "deepseek-baba-singapore":
+        _provider_api_key(provider, model_name)
         extra_body = {"provider": {"order": [BABA_PROVIDER_SLUG]}}
         if _effort_body:
             extra_body = {**extra_body, **_effort_body}
@@ -1124,8 +1268,8 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
                 extra_body = {**extra_body, **thinking}
         kwargs = {
             "model": BABA_MODEL_ID,
-            "api_key": _require_api_key("OPENROUTER_API_KEY", model_name),
-            "base_url": OPENROUTER_BASE_URL,
+            "api_key": _provider_api_key(provider, model_name),
+            "base_url": _provider_base_url(provider),
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -1134,7 +1278,7 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
         return ChatOpenAI(**kwargs)
 
     # DeepSeek models (OpenAI-compatible API)
-    if "deepseek" in model_lower:
+    if _pname == "deepseek":
         from langchain_deepseek import ChatDeepSeek
         if _effort_body:
             _fallback_logger.warning(
@@ -1144,8 +1288,8 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
             )
         kwargs = {
             "model": model_name,
-            "api_key": _require_api_key("DEEPSEEK_API_KEY", model_name, "DEEPSEEK_KEY"),
-            "api_base": "https://api.deepseek.com/v1",
+            "api_key": _provider_api_key(provider, model_name),
+            "api_base": _provider_base_url(provider),
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -1159,7 +1303,7 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
     # "mimo-v2.5-pro" (flagship) and "mimo-v2.5" (lighter, ~half cost).
     # To route MiMo through OpenRouter instead, use ROUTE_VIA_OPENROUTER
     # (slug xiaomi/mimo-v2.5-pro / xiaomi/mimo-v2.5).
-    if "mimo" in model_lower:
+    if _pname == "mimo":
         if _effort_body:
             _fallback_logger.warning(
                 "reasoning_effort ignored for %s: the native MiMo API does not support "
@@ -1167,8 +1311,8 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
             )
         kwargs = {
             "model": model_lower if model_lower in ("mimo-v2.5", "mimo-v2.5-pro") else "mimo-v2.5-pro",
-            "api_key": _require_api_key("MIMO_API_KEY", model_name),
-            "base_url": MIMO_BASE_URL,
+            "api_key": _provider_api_key(provider, model_name),
+            "base_url": _provider_base_url(provider),
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -1180,14 +1324,14 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
 
     # Meta Muse models on OpenRouter (OpenAI-compatible API). Slugs look like
     # "meta/muse-spark-1.2" or "meta/muse-glimmer-30b".
-    if model_name.startswith("meta/"):
+    if _pname == "meta-openrouter":
         extra_body = {}
         if _effort_body:
             extra_body.update(_effort_body)
         kwargs = {
             "model": model_name,
-            "api_key": _require_api_key("OPENROUTER_API_KEY", model_name),
-            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": _provider_api_key(provider, model_name),
+            "base_url": _provider_base_url(provider),
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -1198,7 +1342,7 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
 
     # Meta Muse models on the native Meta Model API (OpenAI-compatible).
     # Model ids look like "muse-spark-1.2-contributor".
-    if "muse" in model_lower:
+    if _pname == "muse":
         if _effort_body:
             _fallback_logger.warning(
                 "reasoning_effort ignored for %s: the native Meta Model API does not "
@@ -1206,8 +1350,8 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
             )
         kwargs = {
             "model": model_name,
-            "api_key": _require_api_key("META_API_KEY", model_name),
-            "base_url": META_BASE_URL,
+            "api_key": _provider_api_key(provider, model_name),
+            "base_url": _provider_base_url(provider),
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -1215,7 +1359,7 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
         return ChatOpenAI(**kwargs)
 
     # Google Gemini models
-    if "gemini" in model_lower:
+    if _pname == "gemini":
         # Use google_genai provider prefix for init_chat_model
         if not model_name.startswith("google_genai:"):
             model_name = f"google_genai:{model_name}"
@@ -1232,7 +1376,7 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
         return init_chat_model(model_name, **kwargs)
 
     # OpenAI models (default fallback)
-    if "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
+    if _pname == "openai":
         if not model_name.startswith("openai:"):
             model_name = f"openai:{model_name}"
         kwargs = {"temperature": temperature}

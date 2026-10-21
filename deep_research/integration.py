@@ -39,11 +39,12 @@ from deep_research.cancellation import (
     as_cancellation_checker,
 )
 from deep_research.events import EventCollector
+from deep_research.langsmith_tracing import langsmith_scope
 from deep_research.models import Credentials, ModelFactory
 from deep_research.observer import Observer
 from deep_research.run_config import RunConfig
 from deep_research.runtime import RuntimeContext, runtime_scope
-from deep_research.trace import TraceCollector, TraceRecord
+from deep_research.trace import TraceCollector, TraceRecord, redact
 
 _log = logging.getLogger(__name__)
 
@@ -141,6 +142,10 @@ def validate_credentials(config: Optional[RunConfig] = None,
     if "ResearchPubMed" in enabled or "ResearchSEC" in enabled:
         if not creds.has("PUBMED_EMAIL") and not creds.has("SEC_EDGAR_CONTACT_EMAIL"):
             optional_missing.append("PUBMED_EMAIL")
+
+    # ── LangSmith tracing (opt-in) ─────────────────────────────────────
+    if cfg.langsmith_tracing and _missing(["LANGSMITH_API_KEY"]):
+        missing_required.append("LANGSMITH_API_KEY")
 
     # ── Optional capabilities ──────────────────────────────────────────
     if not creds.has("PERPLEXITY_API_KEY"):
@@ -340,126 +345,140 @@ async def run_research(
         "config_snapshot": cfg.to_dict(),
     }
 
-    with runtime_scope(context):
-        observer.emit(_events.RUN_STARTED, phase="run", agent="runner",
-                      prompt=prompt[:2000], run_profile=cfg.profile)
-        observer.emit_trace("run_started", phase="run", agent="runner",
-                            prompt=prompt, profile=cfg.profile)
-        # Pre-flight credential report (names only, never values).
-        cred_check = validate_credentials(cfg, creds)
-        observer.emit(_events.CONFIG_VALIDATED, phase="run", agent="runner",
-                      missing_required=cred_check.missing_required,
-                      optional_missing=cred_check.optional_missing)
-        await observer.flush_events()
+    async with langsmith_scope(cfg, creds, run_id, observer=observer) as ls_scope:
+        with runtime_scope(context):
+            observer.emit(_events.RUN_STARTED, phase="run", agent="runner",
+                          prompt=prompt[:2000], run_profile=cfg.profile)
+            observer.emit_trace("run_started", phase="run", agent="runner",
+                                prompt=prompt, profile=cfg.profile)
+            # Pre-flight credential report (names only, never values).
+            cred_check = validate_credentials(cfg, creds)
+            observer.emit(_events.CONFIG_VALIDATED, phase="run", agent="runner",
+                          missing_required=cred_check.missing_required,
+                          optional_missing=cred_check.optional_missing)
+            await observer.flush_events()
 
-        state_holder: list[dict] = []
+            state_holder: list[dict] = []
 
-        async def _drive() -> None:
-            """Stream graph values and cooperate with explicit host cancellation.
+            async def _drive() -> None:
+                """Stream graph values and cooperate with explicit host cancellation.
 
-            Research timing is handled by the supervisor's transition to final
-            writing. Never cancel the graph because that window has elapsed.
-            """
-            async for chunk in graph.astream(inputs, config=graph_config, stream_mode="values"):
-                if isinstance(chunk, dict) and chunk:
-                    state_holder[:] = [dict(chunk)]
+                Research timing is handled by the supervisor's transition to final
+                writing. Never cancel the graph because that window has elapsed.
+                """
+                async for chunk in graph.astream(inputs, config=graph_config, stream_mode="values"):
+                    if isinstance(chunk, dict) and chunk:
+                        state_holder[:] = [dict(chunk)]
+                    await observer.flush_events()
+                    if cancellation_check():
+                        raise RunCancelledError("run cancelled by host")
+
+            # Background flusher: streams records while nested nodes block the
+            # top-level driver (supervisor subgraph, awaited sub-agents, etc.).
+            flusher = asyncio.create_task(_periodic_flush(observer))
+            try:
+                await _drive()
+            except RunCancelledError as e:
                 await observer.flush_events()
-                if cancellation_check():
-                    raise RunCancelledError("run cancelled by host")
+                observer.emit(_events.RUN_CANCELLED, phase="run", agent="runner",
+                              reason=str(e), elapsed_seconds=round(time.monotonic() - started_monotonic, 2))
+                await observer.flush_events()
+                result.status = RunStatus.CANCELLED.value
+                result.failure = str(e) or "cancelled"
+            except Exception as e:  # noqa: BLE001 - surface as failed result
+                await observer.flush_events()
+                observer.emit(_events.RUN_FAILED, phase="run", agent="runner",
+                              error=type(e).__name__,
+                              elapsed_seconds=round(time.monotonic() - started_monotonic, 2))
+                await observer.flush_events()
+                result.status = RunStatus.FAILED.value
+                result.failure = redact(f"{type(e).__name__}: {e}", observer._secrets)
+            finally:
+                flusher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await flusher
 
-        # Background flusher: streams records while nested nodes block the
-        # top-level driver (supervisor subgraph, awaited sub-agents, etc.).
-        flusher = asyncio.create_task(_periodic_flush(observer))
-        try:
-            await _drive()
-        except RunCancelledError as e:
+            final_state: dict = state_holder[-1] if state_holder else {}
+
+            # Build structured output from whatever final/partial state we have.
+            mat = _materialize(final_state, observer, trace_enabled=bool(cfg.enable_research_trace))
+            if result.status in (RunStatus.FAILED.value, RunStatus.TIMED_OUT.value, RunStatus.CANCELLED.value):
+                if mat["final_report"] or mat["draft_report"] or mat["notes"] or mat["curated_sources"]:
+                    # We salvaged partial output.
+                    result.status = RunStatus.PARTIAL.value
+            result.final_report = mat["final_report"]
+            result.research_brief = mat["research_brief"]
+            result.draft_report = mat["draft_report"]
+            result.notes = mat["notes"]
+            result.source_registry = mat["source_registry"]
+            result.curated_sources = mat["curated_sources"]
+            result.secondary_reports = mat["secondary_reports"]
+            result.sources = mat["sources"]
+            result.trace = mat["trace"]
+            result.run_metadata = {
+                "profile": cfg.profile,
+                "prompt_version": cfg.prompt_version,
+                "output_mode": cfg.output_mode,
+                "enabled_agents": list(cfg.enabled_agents),
+                "model_profile": {
+                    "supervisor_chain": list(cfg.supervisor_model_fallback_chain),
+                    "subagent_chain": list(cfg.subagent_model_fallback_chain),
+                    "draft_chain": list(cfg.draft_report_model_fallback_chain),
+                },
+                "research_iterations": mat["research_iterations"],
+                "aborted": mat["aborted"],
+                "abort_reason": mat["abort_reason"],
+                "credential_check": cred_check.to_dict(),
+                "langsmith": {
+                    "requested": bool(cfg.langsmith_tracing),
+                    "active": ls_scope.active,
+                    "project": ls_scope.project,
+                },
+                "elapsed_seconds": round(time.monotonic() - started_monotonic, 2),
+            }
+            result.usage = {
+                "sources_found_logged": len(result.sources),
+                "source_registry_entries": len(result.source_registry),
+                "curated_sources": len(result.curated_sources),
+                "subagent_log_entries": len(observer.subagent_logs),
+                "trace_entries": len(result.trace),
+            }
+
+            ls_scope.finish(result.status)
+
+            # Terminal trace record (full report/brief/draft content).
+            observer.emit_trace(
+                "run_completed", phase="run", agent="runner",
+                status=result.status,
+                final_report=result.final_report,
+                research_brief=result.research_brief,
+                draft_report=result.draft_report,
+                elapsed_seconds=round(time.monotonic() - started_monotonic, 2),
+            )
+
+            # Fail/cancel paths already emitted their specific terminal events.
+            if result.status == RunStatus.COMPLETED.value:
+                observer.emit(_events.RUN_COMPLETED, phase="run", agent="runner",
+                              elapsed_seconds=round(time.monotonic() - started_monotonic, 2),
+                              report_chars=len(result.final_report))
             await observer.flush_events()
-            observer.emit(_events.RUN_CANCELLED, phase="run", agent="runner",
-                          reason=str(e), elapsed_seconds=round(time.monotonic() - started_monotonic, 2))
-            await observer.flush_events()
-            result.status = RunStatus.CANCELLED.value
-            result.failure = str(e) or "cancelled"
-        except Exception as e:  # noqa: BLE001 - surface as failed result
-            await observer.flush_events()
-            observer.emit(_events.RUN_FAILED, phase="run", agent="runner",
-                          error=type(e).__name__,
-                          elapsed_seconds=round(time.monotonic() - started_monotonic, 2))
-            await observer.flush_events()
-            result.status = RunStatus.FAILED.value
-            result.failure = f"{type(e).__name__}: {e}"
-        finally:
-            flusher.cancel()
-            with suppress(asyncio.CancelledError):
-                await flusher
 
-        final_state: dict = state_holder[-1] if state_holder else {}
+            result.logs = observer.get_trace_records()
 
-        # Build structured output from whatever final/partial state we have.
-        mat = _materialize(final_state, observer, trace_enabled=bool(cfg.enable_research_trace))
-        if result.status in (RunStatus.FAILED.value, RunStatus.TIMED_OUT.value, RunStatus.CANCELLED.value):
-            if mat["final_report"] or mat["draft_report"] or mat["notes"] or mat["curated_sources"]:
-                # We salvaged partial output.
-                result.status = RunStatus.PARTIAL.value
-        result.final_report = mat["final_report"]
-        result.research_brief = mat["research_brief"]
-        result.draft_report = mat["draft_report"]
-        result.notes = mat["notes"]
-        result.source_registry = mat["source_registry"]
-        result.curated_sources = mat["curated_sources"]
-        result.secondary_reports = mat["secondary_reports"]
-        result.sources = mat["sources"]
-        result.trace = mat["trace"]
-        result.run_metadata = {
-            "profile": cfg.profile,
-            "prompt_version": cfg.prompt_version,
-            "output_mode": cfg.output_mode,
-            "enabled_agents": list(cfg.enabled_agents),
-            "model_profile": {
-                "supervisor_chain": list(cfg.supervisor_model_fallback_chain),
-                "subagent_chain": list(cfg.subagent_model_fallback_chain),
-                "draft_chain": list(cfg.draft_report_model_fallback_chain),
-            },
-            "research_iterations": mat["research_iterations"],
-            "aborted": mat["aborted"],
-            "abort_reason": mat["abort_reason"],
-            "credential_check": cred_check.to_dict(),
-            "elapsed_seconds": round(time.monotonic() - started_monotonic, 2),
-        }
-        result.usage = {
-            "sources_found_logged": len(result.sources),
-            "source_registry_entries": len(result.source_registry),
-            "curated_sources": len(result.curated_sources),
-            "subagent_log_entries": len(observer.subagent_logs),
-            "trace_entries": len(result.trace),
-        }
+            # Deliver artifacts to the host artifact sink when provided.
+            if observer.artifact_sink is not None:
+                from deep_research.observer import deliver_artifact
+                await deliver_artifact(observer.artifact_sink, "final_report", result.final_report)
+                if result.research_brief:
+                    await deliver_artifact(observer.artifact_sink, "research_brief", result.research_brief)
+                if result.trace:
+                    await deliver_artifact(observer.artifact_sink, "research_trace", result.trace)
 
-        # Terminal trace record (full report/brief/draft content).
-        observer.emit_trace(
-            "run_completed", phase="run", agent="runner",
-            status=result.status,
-            final_report=result.final_report,
-            research_brief=result.research_brief,
-            draft_report=result.draft_report,
-            elapsed_seconds=round(time.monotonic() - started_monotonic, 2),
-        )
-
-        # Fail/cancel paths already emitted their specific terminal events.
-        if result.status == RunStatus.COMPLETED.value:
-            observer.emit(_events.RUN_COMPLETED, phase="run", agent="runner",
-                          elapsed_seconds=round(time.monotonic() - started_monotonic, 2),
-                          report_chars=len(result.final_report))
+    # The LangSmith scope flushes on exit; a late warning (e.g. flush timeout)
+    # is a trace record that was not part of the logs captured above.
+    if ls_scope.active:
         await observer.flush_events()
-
         result.logs = observer.get_trace_records()
-
-        # Deliver artifacts to the host artifact sink when provided.
-        if observer.artifact_sink is not None:
-            from deep_research.observer import deliver_artifact
-            await deliver_artifact(observer.artifact_sink, "final_report", result.final_report)
-            if result.research_brief:
-                await deliver_artifact(observer.artifact_sink, "research_brief", result.research_brief)
-            if result.trace:
-                await deliver_artifact(observer.artifact_sink, "research_trace", result.trace)
 
     return result
 

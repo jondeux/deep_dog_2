@@ -17,9 +17,11 @@ fi
 mkdir -p "$out"
 
 cp "$root/webui/app.py"               "$out/app.py"
+cp "$root/webui/model_catalog.py"      "$out/model_catalog.py"   # imported by app.py
 cp "$root/pyproject.toml" "$root/LICENSE" "$out/"
 cp -r "$root/deep_research"           "$out/deep_research"
 find "$out" -name __pycache__ -type d -prune -exec rm -rf {} +
+find "$out" \( -name .DS_Store -o -name '*.pyc' \) -type f -delete
 
 if [ "$sdk" = docker ]; then
   cp "$root/webui/Dockerfile"          "$out/Dockerfile"

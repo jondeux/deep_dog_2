@@ -1,7 +1,7 @@
 # Deep Dog 2 web UI on Hugging Face Spaces (Docker SDK).
 # Built from the hf-spaces-docker-expert python-app template.
 # Stage the Space repo with webui/build_space.sh; this file sits at its root
-# next to app.py, requirements-ui.txt, pyproject.toml, deep_research/ and README.md.
+# next to app.py, model_catalog.py, requirements-ui.txt, pyproject.toml, deep_research/ and README.md.
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -40,7 +40,7 @@ COPY --chown=1000:1000 pyproject.toml README.md LICENSE ./
 COPY --chown=1000:1000 deep_research ./deep_research
 RUN pip install --user .
 
-COPY --chown=1000:1000 app.py .
+COPY --chown=1000:1000 app.py model_catalog.py ./
 
 EXPOSE 7860
 

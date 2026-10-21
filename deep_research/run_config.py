@@ -126,6 +126,13 @@ class RunConfig:
     # Max chars per string in a trace record; None/0 = no truncation.
     log_truncation: Optional[int] = _cfg.LOG_TRUNCATION
 
+    # ── LangSmith tracing (opt-in) ─────────────────────────────────────
+    # Sends prompts, search results and reports to the caller's LangSmith
+    # project. The API key is NEVER part of the config: it comes from the
+    # run's Credentials (LANGSMITH_API_KEY, optional LANGSMITH_ENDPOINT).
+    langsmith_tracing: bool = False
+    langsmith_project: Optional[str] = None   # None -> "deep-dog-2"
+
     # ── Output behaviour ───────────────────────────────────────────────
     save_report_to_file: bool = _cfg.SAVE_REPORT_TO_FILE
     save_subagent_reports_to_file: bool = _cfg.SAVE_SUBAGENT_REPORTS_TO_FILE

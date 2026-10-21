@@ -26,5 +26,12 @@ Do not add provider keys such as `DEEPSEEK_API_KEY` as Space secrets unless you
 want every visitor to spend them: the engine falls back to the server's
 environment for any key a visitor leaves blank.
 
+Do not set any `LANGSMITH_*` or `LANGCHAIN_*` variable on the Space, as a secret or
+a variable. That includes `LANGSMITH_API_KEY`, `LANGSMITH_ENDPOINT`, `LANGSMITH_TRACING`,
+`LANGSMITH_WORKSPACE_ID` and `LANGSMITH_RUNS_ENDPOINTS`. The page ignores the key and
+endpoint, and a visitor must type their own LangSmith key to trace a run, but the tracing
+library reads the other settings itself: they can route visitors' runs to your account
+or make tracing fail with a warning. They are only meant for the command-line tool.
+
 Engine: [beneadie/deep_dog_2](https://github.com/beneadie/deep_dog_2), MIT
 licensed, itself built on ThinkDepth Deep Research.
