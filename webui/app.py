@@ -33,6 +33,30 @@ from deep_research.integration import RuntimeOptions, run_research, validate_cre
 from deep_research.models import Credentials
 from deep_research.run_config import RunConfig
 
+# ZeroGPU Spaces refuse to start unless some function is decorated with
+# @spaces.GPU. This engine never uses a GPU, so the marker is a no-op that is
+# never called. `spaces` exists only on Hugging Face; elsewhere this is skipped.
+try:
+    import spaces
+
+    @spaces.GPU
+    def _zerogpu_marker() -> None:
+        return None
+except ImportError:
+    pass
+
+# ZeroGPU Spaces refuse to start unless the app defines at least one
+# @spaces.GPU function. The engine never uses a GPU, so this is a no-op that only
+# satisfies that startup check. Off ZeroGPU the `spaces` package is absent or inert.
+try:
+    import spaces
+
+    @spaces.GPU
+    def _zerogpu_startup_check() -> None:
+        return None
+except Exception:  # not on Spaces, or `spaces` not installed
+    pass
+
 # ── Choices ───────────────────────────────────────────────────────────────
 
 # Names the engine is known to resolve. The model boxes accept any name, so this
@@ -340,8 +364,9 @@ def _auth():
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=7860)
+    # Spaces (Gradio SDK) sets GRADIO_SERVER_NAME / GRADIO_SERVER_PORT; honour them.
+    ap.add_argument("--host", default=os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1"))
+    ap.add_argument("--port", type=int, default=int(os.environ.get("GRADIO_SERVER_PORT", "7860")))
     args = ap.parse_args()
     # ssr_mode=False: server-side rendering needs Node, which the slim image lacks.
     build_demo().launch(server_name=args.host, server_port=args.port, auth=_auth(),
