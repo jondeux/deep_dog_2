@@ -37,7 +37,7 @@ dependencies = [
 
 [project.optional-dependencies]
 google = ["langchain-google-genai>=4.0", "google-genai>=1.0"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-xdist>=3.5"]
 
 [project.urls]
 Homepage = "https://github.com/beneadie/deep_dog_2"

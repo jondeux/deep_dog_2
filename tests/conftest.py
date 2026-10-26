@@ -8,7 +8,10 @@ cheaply and deterministically.
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any
+
+import pytest
 
 from langchain_core.messages import AIMessage
 
@@ -125,3 +128,11 @@ def api_config(**overrides) -> RunConfig:
     )
     base.update(overrides)
     return RunConfig(**base).finalize()
+
+
+@pytest.fixture(autouse=True)
+def _fast_ui_poll(monkeypatch):
+    """Shorten the web UI's progress refresh in tests; the app's own 0.7 s is unchanged."""
+    app = sys.modules.get("webui.app")
+    if app is not None:
+        monkeypatch.setattr(app, "_POLL_SECONDS", 0.05)

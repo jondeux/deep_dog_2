@@ -96,6 +96,10 @@ SEARCH_KEY_NAMES = {"tavily": "TAVILY_API_KEY", "exa": "EXA_API_KEY"}
 # Hosted providers whose model lists can be fetched live (box name per provider).
 CATALOG_KEY_NAMES = [model_catalog.KEY_NAMES[p] for p in model_catalog.PROVIDERS]
 
+# Seconds between progress refreshes of a running research job. Tests lower this in-process
+# (tests/conftest.py); nothing in the app reads it from the environment.
+_POLL_SECONDS = 0.7
+
 # LangSmith tracing (opt-in). The region is a fixed choice mapped to a fixed URL here:
 # the visitor never types an endpoint, because a typed URL would make this server send
 # requests to any host they name (SSRF). Keys of this dict are the dropdown values.
@@ -459,7 +463,7 @@ async def run_ui(question, sup, sub, draft, route_or, thinking, minutes, iters, 
         runtime=RuntimeOptions(event_sink=sink, cancellation=token, console_enabled=False)))
     try:
         while not task.done():
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(_POLL_SECONDS)
             elapsed = int(time.time() - t0)
             yield out(f"Running… {elapsed // 60}m {elapsed % 60:02d}s",
                       safe("\n".join(lines[-300:])), "", [], None)
