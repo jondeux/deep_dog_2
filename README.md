@@ -333,7 +333,7 @@ asyncio.run(main())
 
 In an async application or notebook, use `await run_research(...)` directly. Check `result.status`: partial output may be an unfinished draft. Results also include `source_registry`, `curated_sources`, `run_metadata` and `logs`; use `result.to_dict()` for serialization.
 
-For request-specific credentials, pass `credentials=Credentials({"DEEPSEEK_API_KEY": key, ...})`, importing `Credentials` from the integration module. Missing entries fall back to the process environment. Use separate configuration and credentials for each request rather than changing environment variables while runs are active.
+For request-specific credentials, pass `credentials=Credentials({"DEEPSEEK_API_KEY": key, ...})`, importing `Credentials` from the integration module. Missing entries fall back to the process environment, unless you pass `env_fallback=False` (the web UI does), which makes the run use only the keys you pass. Use separate configuration and credentials for each request rather than changing environment variables while runs are active.
 
 ## Choose models
 
@@ -488,7 +488,7 @@ From the CLI or a script that uses `Credentials.from_env()`, set `LANGSMITH_API_
 
 If the flag is on and no key is available, `validate_credentials` reports `LANGSMITH_API_KEY` as missing and the run continues untraced. Tracing problems (bad key, network error) never fail a run: one short warning is logged and the run goes on. Traces are flushed when the run ends, waiting at most 10 seconds. The key is used only to create that run's LangSmith client; it is not stored, logged or put in trace metadata, and is redacted from trace records.
 
-In the web UI (`webui/app.py`) the **Tracing (LangSmith)** panel has the tick box, a password box for the key, a project name (default `deep-dog-2`, at most 80 characters) and a region choice (US or EU). The endpoint comes from that fixed choice, never from typed text. The key is per run and is not stored. Do not set any `LANGSMITH_*` or `LANGCHAIN_*` variable on the Space (secret or variable), in particular `LANGSMITH_API_KEY`, `LANGSMITH_ENDPOINT`, `LANGSMITH_TRACING`, `LANGSMITH_WORKSPACE_ID` and `LANGSMITH_RUNS_ENDPOINTS`: the web UI ignores the key and endpoint, but the other settings are read by the tracing libraries themselves and can send visitors' runs to your account, or make tracing fail with a warning. Error text shown on the page has every typed key replaced by `***`.
+In the web UI (`webui/app.py`) the **Tracing (LangSmith)** panel has the tick box, a password box for the key, a project name (default `deep-dog-2`, at most 80 characters) and a region choice (US or EU). The endpoint comes from that fixed choice, never from typed text. The key is per run and is not stored. In the web UI every provider and search key must be typed on the page: keys in the server's environment are never used (`Credentials(env_fallback=False)`), and the page remembers only non-secret settings and the last report in the visitor's browser. Do not set any `LANGSMITH_*` or `LANGCHAIN_*` variable on the Space (secret or variable), in particular `LANGSMITH_API_KEY`, `LANGSMITH_ENDPOINT`, `LANGSMITH_TRACING`, `LANGSMITH_WORKSPACE_ID` and `LANGSMITH_RUNS_ENDPOINTS`: the web UI ignores the key and endpoint, but the other settings are read by the tracing libraries themselves and can send visitors' runs to your account, or make tracing fail with a warning. Error text shown on the page has every typed key replaced by `***`.
 
 ## Development
 

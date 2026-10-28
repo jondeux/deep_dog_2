@@ -41,6 +41,7 @@ from deep_research.citation_utils import remap_codes, build_final_registry, fina
 from deep_research.agents.shared.tools import think_tool
 from deep_research.config import looks_like_refusal
 from deep_research.runtime import get_runtime
+from deep_research.secrets import scrub_secrets
 from deep_research.cancellation import RunCancelledError
 from deep_research import events as _events
 import time
@@ -403,8 +404,8 @@ async def supervisor(state: SupervisorState) -> Command[Literal["supervisor_tool
         except Exception as e:
             kind = _classify_error(e)
             if kind != "fatal":
-                logger.warning("Supervisor retry failed: %s", e)
-                print(f"{Colors.RED}[CONTENT MODERATION] Supervisor retry after refusal failed: {e}{Colors.RESET}")
+                logger.warning("Supervisor retry failed: %s", scrub_secrets(e))
+                print(f"{Colors.RED}[CONTENT MODERATION] Supervisor retry after refusal failed: {scrub_secrets(e)}{Colors.RESET}")
 
     if response is None:
         response = AIMessage(
@@ -780,9 +781,9 @@ async def supervisor_tools(state: SupervisorState) -> Command[Literal["superviso
                 raise
             kind = _classify_error(e)
             if kind == "fatal":
-                logger.error("Fatal error during research — aborting: %s", e)
+                logger.error("Fatal error during research — aborting: %s", scrub_secrets(e))
                 aborted = True
-                abort_reason = f"Fatal error during research: {e}"
+                abort_reason = f"Fatal error during research: {scrub_secrets(e)}"
                 next_step = END
                 should_end = True
             else:

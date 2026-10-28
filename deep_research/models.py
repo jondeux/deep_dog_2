@@ -43,15 +43,23 @@ class Credentials:
     ``langsmith_from_env=False`` (set by the web UI) stops ``LANGSMITH_*``
     names from falling back to the process environment, so a visitor's run
     can never be traced with, or sent to, the operator's LangSmith account.
+
+    ``env_fallback=False`` (also set by the web UI) stops EVERY name from
+    falling back to the process environment: only ``keys`` is consulted, so a
+    visitor's run can never spend a provider or search key the operator set on
+    the server. The default (True) keeps the CLI/library behaviour.
     """
 
     keys: dict[str, str] = field(default_factory=dict)
     langsmith_from_env: bool = True
+    env_fallback: bool = True
 
     def get(self, name: str) -> Optional[str]:
         value = self.keys.get(name)
         if value:
             return value
+        if not self.env_fallback:
+            return None
         if not self.langsmith_from_env and name.startswith("LANGSMITH_"):
             return None
         return os.getenv(name)

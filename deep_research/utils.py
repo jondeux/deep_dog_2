@@ -15,7 +15,7 @@ from tavily import TavilyClient
 
 from deep_research.config import EXA_SEARCH_MAX_CHARS
 from deep_research.observability import log_source
-from deep_research.secrets import get_secret
+from deep_research.secrets import env_fallback_allowed, get_secret
 from deep_research.time_utils import get_today_str  # re-export (canonical def lives in time_utils.py)
 
 # ===== UTILITY FUNCTIONS =====
@@ -135,6 +135,12 @@ async def tavily_search_multiple(
         List of search result dictionaries
     """
     import time
+
+    # A run that must use only its own typed keys (web UI) never falls back to
+    # the module-level ``tavily_client``, which may hold the server's key.
+    if not get_secret("TAVILY_API_KEY") and not env_fallback_allowed():
+        logger.warning("Tavily search skipped: no TAVILY_API_KEY was supplied for this run")
+        return [{'results': []} for _ in search_queries]
 
     # Execute searches sequentially with timeout + retry protection
     search_docs = []
