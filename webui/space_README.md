@@ -22,9 +22,15 @@ Operator settings (Space variables and secrets):
 | `UI_MAX_MINUTES` | variable | Upper limit for the research time slider. Default 30. |
 | `UI_MAX_CONCURRENT_RUNS` | variable | Research runs allowed at once. Default 2. |
 
-Do not add provider keys such as `DEEPSEEK_API_KEY` as Space secrets unless you
-want every visitor to spend them: the engine falls back to the server's
-environment for any key a visitor leaves blank.
+Provider and search keys set as Space secrets (`DEEPSEEK_API_KEY`, `EXA_API_KEY`,
+`TAVILY_API_KEY` and so on) are never used by the page: a web run uses only the
+keys the visitor types, and a key left blank counts as missing even if the server
+has one. Visitors cannot spend your keys. There is no need to add provider keys
+to the Space.
+
+The page remembers non-secret settings (question, models, budget, search and
+tracing choices) and the last finished report in the visitor's own browser. Key
+boxes, "Other keys" and the LangSmith key are never remembered.
 
 Do not set any `LANGSMITH_*` or `LANGCHAIN_*` variable on the Space, as a secret or
 a variable. That includes `LANGSMITH_API_KEY`, `LANGSMITH_ENDPOINT`, `LANGSMITH_TRACING`,

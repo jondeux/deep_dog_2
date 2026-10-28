@@ -1,6 +1,7 @@
 """Offline tests for the Gradio web UI (no provider or search calls)."""
 
 import asyncio
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -52,7 +53,13 @@ async def _run(**over):
             a["minutes"], a["iters"], a["searches"], a["concurrency"], a["agents"],
             a["web_on"], a["use_tavily"], a["use_exa"], *a["keys"], a["extra"], request=REQ):
         outputs.append(out)
+        # The report file exists only until Gradio has taken it (the generator's next step).
+        if out[-1]:
+            _downloads.append(open(out[-1], encoding="utf-8").read())
     return outputs
+
+
+_downloads: list = []
 
 
 def test_parse_extra_keys_ignores_comments_and_blanks():
@@ -81,7 +88,8 @@ def test_completed_run_streams_progress_and_returns_report(tmp_path):
     assert status.startswith("Completed")
     assert FINAL_TEXT in report
     assert "run_started" in log and "run_completed" in log
-    assert download and open(download, encoding="utf-8").read() == FINAL_TEXT
+    assert download and _downloads[-1] == FINAL_TEXT
+    assert not os.path.exists(download)                  # the per-run dir is removed after the yield
     assert not ui._RUNNING and not ui._TOKENS           # session state is cleaned up
 
 

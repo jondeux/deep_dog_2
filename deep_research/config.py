@@ -740,8 +740,23 @@ _cred_resolver_var: contextvars.ContextVar = contextvars.ContextVar(
 )
 
 
+# True while a credential_scope for a no-env-fallback Credentials is active (web
+# UI). Key lookups then never read os.environ, and init_chat_model providers get
+# the typed key passed explicitly instead of reading the server environment.
+_cred_strict_var: contextvars.ContextVar = contextvars.ContextVar(
+    "deep_research_cred_strict", default=False
+)
+
+
 def _active_cred_resolver():
     return _cred_resolver_var.get()
+
+
+def _env_lookup(name: str):
+    """``os.getenv(name)``, except inside a no-env-fallback credential scope."""
+    if _cred_strict_var.get():
+        return None
+    return os.getenv(name)
 
 
 class credential_scope:
@@ -764,9 +779,12 @@ class credential_scope:
             if callable(getter):
                 resolver = getter
         self._token = _cred_resolver_var.set(resolver)
+        strict = getattr(self._credentials, "env_fallback", True) is False
+        self._strict_token = _cred_strict_var.set(strict)
         return self
 
     def __exit__(self, *exc):
+        _cred_strict_var.reset(self._strict_token)
         _cred_resolver_var.reset(self._token)
         return False
 
@@ -929,7 +947,7 @@ def _model_key_available(model_name: str, route_via_openrouter: bool, resolver=N
             val = resolver(env_name)
             if val:
                 return True
-        return bool(os.getenv(env_name))
+        return bool(_env_lookup(env_name))
 
     alternatives = model_required_keys(model_name, route_via_openrouter)
     if not alternatives:
@@ -975,7 +993,7 @@ def _require_api_key(env_var: str, model_name: str, *alt_env_vars: str, resolver
         if resolver is not None:
             value = resolver(var)
         if not value:
-            value = os.getenv(var)
+            value = _env_lookup(var)
         if value:
             return value
     alts = f" (or {', '.join(alt_env_vars)})" if alt_env_vars else ""
@@ -1373,6 +1391,9 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
         # Untested (no working GEMINI_API_KEY available during development).
         if _eff_mode != "off":
             kwargs["generation_config"] = {"thinking_config": {"thinking_budget": 1}}
+        if _cred_strict_var.get():
+            # Web UI: the library would read the server's GOOGLE_API_KEY; pass the typed key.
+            kwargs["api_key"] = _provider_api_key(provider, model_name)
         return init_chat_model(model_name, **kwargs)
 
     # OpenAI models (default fallback)
@@ -1382,6 +1403,9 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
         kwargs = {"temperature": temperature}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        if _cred_strict_var.get():
+            # Web UI: the library would read the server's OPENAI_API_KEY; pass the typed key.
+            kwargs["api_key"] = _provider_api_key(provider, model_name)
         return init_chat_model(model_name, **kwargs)
 
     # If we can't determine the provider, raise an error

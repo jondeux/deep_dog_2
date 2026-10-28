@@ -1,0 +1,77 @@
+# Builds the Gradio Space bundle and pushes it to the Hugging Face Space.
+#
+# One-time setup (repository Settings → Secrets and variables → Actions):
+#   secret   HF_TOKEN   a Hugging Face token with write access to the Space
+#   variable HF_SPACE   the Space id, "owner/name"
+# Provider and tracing keys never belong here or on the Space: visitors type their own.
+name: Sync Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deep_research/**"
+      - "webui/**"
+      - "pyproject.toml"
+      - "LICENSE"
+      - ".github/workflows/sync-space.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-space
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_SPACE: ${{ vars.HF_SPACE }}
+    steps:
+      - name: Check configuration
+        run: |
+          if [ -z "$HF_TOKEN" ] || [ -z "$HF_SPACE" ]; then
+            echo "::warning::HF_TOKEN secret or HF_SPACE variable is not set; nothing to sync."
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          elif ! printf '%s' "$HF_SPACE" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+            echo "::error::HF_SPACE must look like owner/name."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        if: env.SKIP != '1'
+
+      - uses: actions/setup-python@v5
+        if: env.SKIP != '1'
+        with:
+          python-version: "3.11"
+
+      - name: Build the Gradio bundle
+        if: env.SKIP != '1'
+        run: |
+          bash webui/build_space.sh "$RUNNER_TEMP/bundle" gradio
+          python -m compileall -q "$RUNNER_TEMP/bundle"
+          find "$RUNNER_TEMP/bundle" -name __pycache__ -type d -prune -exec rm -rf {} +
+
+      - name: Push the bundle to the Space
+        if: env.SKIP != '1'
+        run: |
+          auth="$(printf 'hf:%s' "$HF_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git_hf() { git -c "http.extraheader=Authorization: Basic $auth" "$@"; }
+          git_hf clone --depth 1 "https://huggingface.co/spaces/$HF_SPACE" "$RUNNER_TEMP/space"
+          rsync -a --delete --exclude .git --exclude .gitattributes \
+            "$RUNNER_TEMP/bundle/" "$RUNNER_TEMP/space/"
+          cd "$RUNNER_TEMP/space"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Space already matches ${GITHUB_SHA}."
+            exit 0
+          fi
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Sync from ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+          git_hf push origin HEAD:main

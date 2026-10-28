@@ -9,10 +9,11 @@ agent engine's tool_node.
 """
 
 import asyncio
+import hashlib
 import logging
 import time
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
 
 import requests
 from langchain_core.tools import tool
@@ -32,7 +33,9 @@ REDDIT_USER_AGENT = (
 
 # ── OAuth flow ─────────────────────────────────────────────────────────
 
-_reddit_token_cache: dict = {"token": None, "expires_at": 0}
+# The token is only reused for the credentials it was minted from ("key" is a hash of them),
+# so one run's Reddit account is never handed to a run that typed different or no keys.
+_reddit_token_cache: dict = {"token": None, "expires_at": 0, "key": None}
 
 # Guards token fetch/refresh. Must only be touched on the event-loop thread
 # (asyncio.Lock is not thread-safe), so the fetch itself runs via to_thread
@@ -40,16 +43,30 @@ _reddit_token_cache: dict = {"token": None, "expires_at": 0}
 _reddit_token_lock = asyncio.Lock()
 
 
+def _reddit_creds() -> tuple[str, str, str, str]:
+    return (get_secret("REDDIT_CLIENT_ID") or "", get_secret("REDDIT_CLIENT_SECRET") or "",
+            get_secret("REDDIT_USERNAME") or "", get_secret("REDDIT_PASSWORD") or "")
+
+
+def _reddit_creds_key() -> str:
+    return hashlib.sha256("\0".join(_reddit_creds()).encode("utf-8")).hexdigest()
+
+
+def _cached_reddit_token(now: float) -> Optional[str]:
+    c = _reddit_token_cache
+    if c["token"] and now < c["expires_at"] and c.get("key") == _reddit_creds_key():
+        return c["token"]
+    return None
+
+
 def _get_reddit_token() -> str:
     """Obtain or refresh a Reddit OAuth token via password grant (TTL cached)."""
     now = time.time()
-    if _reddit_token_cache["token"] and now < _reddit_token_cache["expires_at"]:
-        return _reddit_token_cache["token"]
+    cached = _cached_reddit_token(now)
+    if cached:
+        return cached
 
-    client_id = get_secret("REDDIT_CLIENT_ID") or ""
-    client_secret = get_secret("REDDIT_CLIENT_SECRET") or ""
-    username = get_secret("REDDIT_USERNAME") or ""
-    password = get_secret("REDDIT_PASSWORD") or ""
+    client_id, client_secret, username, password = _reddit_creds()
 
     if not all([client_id, client_secret, username, password]):
         raise ValueError(
@@ -71,6 +88,7 @@ def _get_reddit_token() -> str:
             result = resp.json()
             _reddit_token_cache["token"] = result["access_token"]
             _reddit_token_cache["expires_at"] = now + result.get("expires_in", 86400) - 60
+            _reddit_token_cache["key"] = _reddit_creds_key()
             return _reddit_token_cache["token"]
         except Exception as e:
             last_error = e
@@ -90,12 +108,10 @@ async def _ensure_reddit_token() -> None:
     in a worker thread via asyncio.to_thread while the lock is held. This
     serializes concurrent first-calls so exactly one token fetch occurs.
     """
-    now = time.time()
-    if _reddit_token_cache["token"] and now < _reddit_token_cache["expires_at"]:
+    if _cached_reddit_token(time.time()):
         return
     async with _reddit_token_lock:
-        now = time.time()
-        if _reddit_token_cache["token"] and now < _reddit_token_cache["expires_at"]:
+        if _cached_reddit_token(time.time()):
             return
         await asyncio.to_thread(_get_reddit_token)
 
@@ -103,10 +119,13 @@ async def _ensure_reddit_token() -> None:
 async def _reddit_get(url: str, params: dict = None):
     """Sync requests call wrapped in run_in_executor — keeps blocking IO off the loop."""
     await _ensure_reddit_token()
+    # Built here, not in the executor thread: run_in_executor does not carry the run's
+    # credential scope, and the cached token is tied to those credentials.
+    headers = _oauth_headers()
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
-        lambda: requests.get(url, headers=_oauth_headers(), params=params, timeout=15),
+        lambda: requests.get(url, headers=headers, params=params, timeout=15),
     )
 
 

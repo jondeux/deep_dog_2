@@ -255,3 +255,44 @@ def test_sec_user_agent_resolves_runtime_credentials(monkeypatch):
     with runtime_scope(ctx):
         headers = sec_tools._sec_headers()
     assert headers["User-Agent"] == ua
+
+
+def test_reddit_token_cache_is_not_shared_between_credentials(monkeypatch):
+    """A token minted from one run's Reddit keys is never served to a run with other keys."""
+    from deep_research.agents.reddit import tools as reddit_tools
+    from deep_research.models import Credentials
+    from deep_research.run_config import RunConfig
+    from deep_research.runtime import RuntimeContext, runtime_scope
+
+    class _Resp:
+        def __init__(self, tok):
+            self.tok = tok
+        def json(self):
+            return {"access_token": self.tok, "expires_in": 3600}
+        def raise_for_status(self):
+            return None
+
+    posted = []
+
+    def _fake_post(url, auth=None, data=None, headers=None, timeout=None):
+        posted.append(data["username"])
+        return _Resp("tok-" + data["username"])
+
+    monkeypatch.setattr(reddit_tools.requests, "post", _fake_post)
+    reddit_tools._reddit_token_cache.update({"token": None, "expires_at": 0, "key": None})
+
+    def creds(user):
+        return Credentials({"REDDIT_CLIENT_ID": "cid-12345", "REDDIT_CLIENT_SECRET": "sec-12345",
+                            "REDDIT_USERNAME": user, "REDDIT_PASSWORD": "pw-123456"},
+                           env_fallback=False)
+
+    def token_for(c):
+        ctx = RuntimeContext(run_id="r", thread_id="t", config=RunConfig(enabled_agents=["ResearchWeb"]).finalize(), credentials=c)
+        with runtime_scope(ctx):
+            return reddit_tools._get_reddit_token()
+
+    assert token_for(creds("alice")) == "tok-alice"
+    assert token_for(creds("alice")) == "tok-alice" and posted == ["alice"]  # same keys: cached
+    assert token_for(creds("bob")) == "tok-bob"                               # other keys: refetched
+    with pytest.raises(ValueError):                                           # no keys: no cached token
+        token_for(Credentials({}, env_fallback=False))

@@ -7,9 +7,14 @@ cited report.
 
 Credentials: provider keys are typed into the page and passed to the engine as
 a per-run ``Credentials`` object. They are never written to disk, never put in
-``os.environ`` and never echoed back. The engine still falls back to the
-server's environment for any key not typed in, so do not set provider keys as
-Space secrets unless you want every visitor to spend them.
+``os.environ`` and never echoed back. A web run NEVER uses the server's own
+environment keys (``Credentials(env_fallback=False)``): a provider or search key
+that is not typed on the page counts as missing, even if the operator set it as
+a Space secret, so visitors can never spend the operator's keys.
+
+The page remembers non-secret settings (and the last finished report) in the
+visitor's browser with ``gr.BrowserState``; key boxes, the "Other keys" box and
+the LangSmith key are never stored.
 
 Run locally:   python webui/app.py
 On a Space:    python app.py --host 0.0.0.0 --port 7860
@@ -19,9 +24,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import hmac
+import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -248,7 +256,8 @@ def build_credentials(key_values: list[str], extra: str, ls_on=False, ls_key="",
         keys["LANGSMITH_API_KEY"] = ls_key
         keys["LANGSMITH_ENDPOINT"] = langsmith_endpoint(ls_region)
     # The operator's own LANGSMITH_* environment must never trace a visitor's run.
-    return Credentials(keys=keys, langsmith_from_env=False)
+    # Likewise no provider/search key may come from the server's environment.
+    return Credentials(keys=keys, langsmith_from_env=False, env_fallback=False)
 
 
 def typed_secrets(key_values, extra, ls_key="") -> list[str]:
@@ -316,11 +325,13 @@ def engine_to_selection(engine: str) -> tuple[bool, bool, bool]:
 
 
 def search_key_status(name: str, typed: str) -> str:
-    """Key state for one search tool: typed on the page, set on the server, or absent."""
+    """Key state for one search tool: typed on the page or absent.
+
+    A key set in the server's environment is deliberately not reported (and not used):
+    web runs only ever use keys typed on the page.
+    """
     if (typed or "").strip():
         return "key entered"
-    if os.environ.get(name):
-        return "server key available"
     return "no key"
 
 
@@ -398,6 +409,181 @@ def live_status(sup, sub, draft, route_or, agents, web_on, use_tavily, use_exa, 
     if missing:
         return tavily, exa, "Missing keys: " + ", ".join(missing) + note
     return tavily, exa, "Ready" + note
+
+
+# ── Report files ──────────────────────────────────────────────────────────
+
+# Each finished run writes report.md into its own directory under this per-process root,
+# yields it to the File component (Gradio copies it into its own cache while serving the
+# yielded value), then deletes the directory. Gradio's cache copies are aged out by
+# delete_cache. The root is passed to launch(allowed_paths=...) so the file is allowed
+# wherever the system temp dir is.
+_REPORT_ROOT: Optional[Path] = None
+_report_lock = threading.Lock()
+CACHE_SWEEP_SECONDS = 3600
+CACHE_MAX_AGE_SECONDS = 6 * 3600
+
+
+def report_root() -> Path:
+    global _REPORT_ROOT
+    with _report_lock:
+        if _REPORT_ROOT is None:
+            _REPORT_ROOT = Path(tempfile.mkdtemp(prefix="deepdog_reports_"))
+            atexit.register(shutil.rmtree, str(_REPORT_ROOT), True)
+        # launch(allowed_paths=...) captured this exact path, so a root removed by a /tmp
+        # cleaner is recreated in place rather than replaced by a new one.
+        _REPORT_ROOT.mkdir(parents=True, exist_ok=True)
+        return _REPORT_ROOT
+
+
+def _sweep_stale_run_dirs(root: Path, max_age: float = CACHE_SWEEP_SECONDS) -> None:
+    """Remove run dirs a disconnected client left behind (the generator never resumed)."""
+    cutoff = time.time() - max_age
+    for d in root.glob("deepdog_*"):
+        try:
+            if d.is_dir() and d.stat().st_mtime < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+# ── Settings remembered in the browser ────────────────────────────────────
+
+# gr.BrowserState keeps a small JSON payload in the visitor's localStorage:
+#   {"v": 1, "settings": {name: value, ...}, "report": {"text": str, "sources": [[c, t, u]]}}
+# NON-SECRET settings only. No key box, no "Other keys" box and no LangSmith key ever
+# reaches these functions: they are not among their inputs. Whatever comes back from the
+# browser is untrusted and is validated field by field; a bad field is ignored.
+SETTINGS_STORAGE_KEY = "deepdog2_settings"
+# Not a secret: the payload holds nothing sensitive. A fixed value keeps a visitor's saved
+# page readable across server restarts (Gradio otherwise makes a new random one per start).
+SETTINGS_STORAGE_SECRET = "deepdog2-non-secret-settings-v1"
+SETTINGS_VERSION = 1
+STORE_MAX_BYTES = 200_000
+STORE_QUESTION_MAX_CHARS = 4000
+STORE_MAX_SOURCES = 2000
+# run_ui's non-secret controls, in the order save_settings/restore_settings use.
+SETTING_NAMES = ("question", "preset", "sup", "sub", "draft", "route_or", "thinking", "minutes",
+                 "iters", "searches", "concurrency", "agents", "web_on", "use_tavily", "use_exa",
+                 "ls_on", "ls_project", "ls_region")
+_MODEL_NAME = re.compile(r"[\w.:/@+\-]{1,120}")
+_SLIDER_RANGES = {"minutes": (2, None), "iters": (3, 50), "searches": (1, 10),
+                  "concurrency": (1, 6)}
+
+
+def _whole_number(value, lo, hi):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and lo <= value <= hi:
+        return value
+    return None
+
+
+def _model_list(value):
+    if not isinstance(value, list) or not 1 <= len(value) <= 8:
+        return None
+    if not all(isinstance(v, str) and _MODEL_NAME.fullmatch(v) for v in value):
+        return None
+    return list(value)
+
+
+def sanitize_settings(raw) -> dict:
+    """The valid fields of a stored settings dict; anything else is left out."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for name in SETTING_NAMES:
+        if name not in raw:
+            continue
+        value = raw[name]
+        if name == "question":
+            ok = isinstance(value, str)
+            value = value[:STORE_QUESTION_MAX_CHARS] if ok else None
+        elif name == "preset":
+            value = value if isinstance(value, str) and value in PRESETS else None
+        elif name in ("sup", "sub", "draft"):
+            value = _model_list(value)
+        elif name in ("route_or", "web_on", "use_tavily", "use_exa", "ls_on"):
+            value = value if isinstance(value, bool) else None
+        elif name == "thinking":
+            value = value if isinstance(value, str) and value in ("auto", "on", "off") else None
+        elif name in _SLIDER_RANGES:
+            lo, hi = _SLIDER_RANGES[name]
+            value = _whole_number(value, lo, MAX_MINUTES if hi is None else hi)
+        elif name == "agents":
+            ok = (isinstance(value, list) and value
+                  and all(isinstance(v, str) and v in AGENT_CHOICES for v in value))
+            value = [a for a in AGENT_CHOICES if a in value] if ok else None
+        elif name == "ls_project":
+            value = clean_project(value) if isinstance(value, str) else None
+        elif name == "ls_region":
+            value = value if isinstance(value, str) and value in LANGSMITH_REGIONS else None
+        if value is not None:
+            out[name] = value
+    return out
+
+
+def _clean_report(raw):
+    """A stored {"text", "sources"} dict if well formed and small enough, else None."""
+    if not isinstance(raw, dict):
+        return None
+    text, rows = raw.get("text"), raw.get("sources")
+    if not isinstance(text, str) or not text or not isinstance(rows, list):
+        return None
+    if len(rows) > STORE_MAX_SOURCES:
+        return None
+    clean = []
+    for row in rows:
+        if not (isinstance(row, list) and len(row) == 3 and all(isinstance(c, str) for c in row)):
+            return None
+        clean.append(list(row))
+    return {"text": text, "sources": clean}
+
+
+def build_payload(settings: dict, report) -> dict:
+    """Payload for the browser; the report is dropped when the whole thing is too large."""
+    payload = {"v": SETTINGS_VERSION, "settings": settings}
+    report = _clean_report(report)
+    if report is not None:
+        with_report = dict(payload, report=report)
+        if len(json.dumps(with_report, ensure_ascii=False).encode("utf-8")) <= STORE_MAX_BYTES:
+            return with_report
+    return payload
+
+
+def _stored(state):
+    """(settings, report) from a stored payload; ({}, None) when it is not one of ours."""
+    if not isinstance(state, dict) or state.get("v") != SETTINGS_VERSION:
+        return {}, None
+    return sanitize_settings(state.get("settings")), _clean_report(state.get("report"))
+
+
+def save_settings(state, *values):
+    """Stored payload after the page's non-secret controls changed (keeps the stored report)."""
+    _, report = _stored(state)
+    return build_payload(sanitize_settings(dict(zip(SETTING_NAMES, values))), report)
+
+
+def store_report(report_text, rows, download, state):
+    """Stored payload after a run: remembers the report only when the run completed."""
+    if not download or not (report_text or "").strip():
+        return gr.skip()
+    settings, _ = _stored(state)
+    clean = [[str(c) for c in row[:3]] for row in (rows or []) if len(row) >= 3]
+    return build_payload(settings, {"text": report_text, "sources": clean})
+
+
+def restore_settings(state):
+    """Control values from the stored payload: SETTING_NAMES order, then report, sources.
+
+    Anything missing or invalid is left as it is (gr.skip()).
+    """
+    settings, report = _stored(state)
+    values = [settings[n] if n in settings else gr.skip() for n in SETTING_NAMES]
+    values += [report["text"], report["sources"]] if report else [gr.skip(), gr.skip()]
+    return tuple(values)
 
 
 # ── The run ───────────────────────────────────────────────────────────────
@@ -483,11 +669,18 @@ async def run_ui(question, sup, sub, draft, route_or, thinking, minutes, iters, 
                       result.final_report or "", [], None)
             return
 
-        path = Path(tempfile.mkdtemp(prefix="deepdog_")) / "report.md"
-        path.write_text(result.final_report, encoding="utf-8")
-        elapsed = int(time.time() - t0)
-        yield out(with_ls(f"Completed in {elapsed // 60}m {elapsed % 60:02d}s."),
-                  log, result.final_report, source_rows(result), str(path))
+        root = report_root()
+        _sweep_stale_run_dirs(root)
+        run_dir = Path(tempfile.mkdtemp(prefix="deepdog_", dir=root))
+        try:
+            path = run_dir / "report.md"
+            path.write_text(result.final_report, encoding="utf-8")
+            elapsed = int(time.time() - t0)
+            yield out(with_ls(f"Completed in {elapsed // 60}m {elapsed % 60:02d}s."),
+                      log, result.final_report, source_rows(result), str(path))
+        finally:
+            # Gradio has copied the yielded file into its cache by the time this resumes.
+            shutil.rmtree(run_dir, ignore_errors=True)
     finally:
         if not task.done():
             task.cancel()
@@ -556,6 +749,359 @@ def refresh_models(key_deepinfra, key_together, key_fireworks, request: gr.Reque
     return choices, choices, choices, "Model lists: " + model_catalog.status_line(results)
 
 
+# ── Look ──────────────────────────────────────────────────────────────────
+# A dark-only page: near-black canvas, a four-step surface ladder, hairline borders and
+# one lavender accent (primary button, focus ring, links). No gradients, no shadows,
+# no web fonts: the page loads nothing from third parties.
+
+_SANS = ('ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", '
+         'Arial, sans-serif')
+_MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace'
+
+_THEME_TOKENS = {
+    "body_background_fill": "#010102", "body_text_color": "#f7f8f8",
+    "body_text_color_subdued": "#8a8f98",
+    "background_fill_primary": "#0f1011", "background_fill_secondary": "#141516",
+    "border_color_primary": "#23252a", "border_color_accent": "#5e6ad2",
+    "color_accent_soft": "#191a1b", "link_text_color": "#828fff",
+    "link_text_color_hover": "#a3acff", "link_text_color_active": "#828fff",
+    "link_text_color_visited": "#828fff",
+    "block_background_fill": "#0f1011", "block_border_color": "#23252a",
+    "block_border_width": "1px", "block_shadow": "none", "block_label_background_fill": "#0f1011",
+    "block_label_border_color": "#23252a", "block_label_text_color": "#d0d6e0",
+    "block_title_text_color": "#d0d6e0", "block_info_text_color": "#8a8f98",
+    "panel_background_fill": "#0f1011", "panel_border_color": "#23252a",
+    "input_background_fill": "#141516", "input_background_fill_focus": "#141516",
+    "input_background_fill_hover": "#141516", "input_border_color": "#34343a",
+    "input_border_color_focus": "#5e6ad2", "input_border_color_hover": "#3e3e44",
+    "input_shadow": "none", "input_shadow_focus": "0 0 0 2px rgba(94,105,209,0.5)",
+    "input_placeholder_color": "#62666d",
+    "button_primary_background_fill": "#5e6ad2", "button_primary_background_fill_hover": "#828fff",
+    "button_primary_border_color": "#5e6ad2", "button_primary_border_color_hover": "#828fff",
+    "button_primary_text_color": "#ffffff", "button_primary_text_color_hover": "#ffffff",
+    "button_primary_shadow": "none", "button_primary_shadow_hover": "none",
+    "button_secondary_background_fill": "#0f1011",
+    "button_secondary_background_fill_hover": "#18191a",
+    "button_secondary_border_color": "#34343a", "button_secondary_border_color_hover": "#3e3e44",
+    "button_secondary_text_color": "#f7f8f8", "button_secondary_text_color_hover": "#f7f8f8",
+    "button_secondary_shadow": "none", "button_secondary_shadow_hover": "none",
+    "button_cancel_background_fill": "#0f1011", "button_cancel_background_fill_hover": "#18191a",
+    "button_cancel_border_color": "#34343a", "button_cancel_border_color_hover": "#3e3e44",
+    "button_cancel_text_color": "#f7f8f8", "button_cancel_text_color_hover": "#f7f8f8",
+    "button_cancel_shadow": "none", "button_cancel_shadow_hover": "none",
+    "checkbox_background_color": "#141516", "checkbox_background_color_hover": "#18191a",
+    "checkbox_background_color_focus": "#141516", "checkbox_background_color_selected": "#5e6ad2",
+    "checkbox_border_color": "#3e3e44", "checkbox_border_color_hover": "#62666d",
+    "checkbox_border_color_focus": "#5e6ad2", "checkbox_border_color_selected": "#5e6ad2",
+    "checkbox_label_background_fill": "#141516", "checkbox_label_background_fill_hover": "#18191a",
+    "checkbox_label_background_fill_selected": "#191a1b",
+    "checkbox_label_border_color": "#23252a", "checkbox_label_border_color_hover": "#34343a",
+    "checkbox_label_border_color_selected": "#5e6ad2",
+    "checkbox_label_text_color": "#d0d6e0", "checkbox_label_text_color_selected": "#f7f8f8",
+    "checkbox_label_shadow": "none", "slider_color": "#5e6ad2",
+    "table_border_color": "#23252a", "table_even_background_fill": "#0f1011",
+    "table_odd_background_fill": "#141516", "table_row_focus": "#18191a",
+    "table_text_color": "#f7f8f8", "code_background_fill": "#141516",
+    "accordion_text_color": "#f7f8f8", "loader_color": "#5e6ad2",
+    "shadow_drop": "none", "shadow_drop_lg": "none", "shadow_inset": "none",
+    "shadow_spread": "0px", "error_background_fill": "#141516", "error_border_color": "#3e3e44",
+    "error_text_color": "#f7f8f8",
+}
+
+
+def build_theme() -> gr.themes.Base:
+    """The dark theme. Light and dark values are identical, so the visitor's OS setting
+    cannot lighten any part of the page."""
+    import inspect
+    valid = set(inspect.signature(gr.themes.Base.set).parameters)
+    values = {}
+    for name, value in _THEME_TOKENS.items():
+        for key in (name, name + "_dark"):
+            if key in valid:
+                values[key] = value
+    return gr.themes.Base(
+        primary_hue=gr.themes.Color(
+            c50="#f0f1fc", c100="#e1e3f8", c200="#c3c7f1", c300="#a3acff", c400="#828fff",
+            c500="#5e6ad2", c600="#5e69d1", c700="#4c56b0", c800="#3b4389", c900="#2a3063",
+            c950="#1b1f40", name="lavender"),
+        neutral_hue=gr.themes.Color(
+            c50="#f7f8f8", c100="#d0d6e0", c200="#8a8f98", c300="#62666d", c400="#3e3e44",
+            c500="#34343a", c600="#23252a", c700="#191a1b", c800="#141516", c900="#0f1011",
+            c950="#010102", name="ink"),
+        radius_size=gr.themes.Size(xxs="4px", xs="4px", sm="6px", md="8px", lg="12px",
+                                   xl="12px", xxl="16px"),
+        font=[f.strip().strip('"') for f in _SANS.split(",")],
+        font_mono=[f.strip().strip('"') for f in _MONO.split(",")],
+    ).set(**values)
+
+
+CSS = """
+:root, .dark, body, .gradio-container {
+  color-scheme: dark;
+  --dd-canvas: #010102; --dd-s1: #0f1011; --dd-s2: #141516; --dd-s3: #18191a; --dd-s4: #191a1b;
+  --dd-line: #23252a; --dd-line-2: #34343a; --dd-line-3: #3e3e44;
+  --dd-ink: #f7f8f8; --dd-ink-2: #d0d6e0; --dd-ink-3: #8a8f98; --dd-ink-4: #62666d;
+  --dd-accent: #5e6ad2; --dd-accent-hover: #828fff;
+  --dd-ring: 0 0 0 2px rgba(94, 105, 209, 0.5);
+  --font: __SANS__; --font-mono: __MONO__;
+  --body-background-fill: var(--dd-canvas); --body-text-color: var(--dd-ink);
+  --background-fill-primary: var(--dd-s1); --background-fill-secondary: var(--dd-s2);
+  --block-background-fill: var(--dd-s1); --block-border-color: var(--dd-line);
+  --border-color-primary: var(--dd-line); --input-background-fill: var(--dd-s2);
+  --input-border-color: var(--dd-line-2); --body-text-color-subdued: var(--dd-ink-3);
+  --block-label-text-color: var(--dd-ink-2); --block-title-text-color: var(--dd-ink-2);
+  --neutral-50: #f7f8f8; --neutral-100: #d0d6e0; --neutral-200: #8a8f98;
+  --shadow-drop: none; --shadow-drop-lg: none; --shadow-spread: 0px;
+}
+html, body { background: var(--dd-canvas) !important; color: var(--dd-ink); }
+.gradio-container {
+  background: var(--dd-canvas) !important; font-family: var(--font) !important;
+  max-width: 1120px !important; margin: 0 auto !important;
+  padding: 32px clamp(12px, 4vw, 24px) 64px !important;
+  font-size: 16px; line-height: 1.5; letter-spacing: -0.05px;
+}
+.gradio-container *, .gradio-container *::before, .gradio-container *::after {
+  box-shadow: none; text-shadow: none;
+}
+.gradio-container, .gradio-container .gap, .gradio-container .form { overflow-x: clip; }
+.gradio-container :focus-visible { outline: 2px solid rgba(94, 105, 209, 0.7); outline-offset: 1px; }
+
+/* Headings and prose */
+.gradio-container h1 {
+  font-size: 40px; line-height: 1.15; font-weight: 600; letter-spacing: -1px;
+  color: var(--dd-ink); margin: 0 0 8px; border: 0;
+}
+.gradio-container h2 {
+  font-size: 22px; line-height: 1.25; font-weight: 500; letter-spacing: -0.4px;
+  color: var(--dd-ink); margin: 0;
+}
+.gradio-container .prose, .gradio-container .prose p, .gradio-container .md {
+  color: var(--dd-ink-2); font-size: 16px; line-height: 1.5;
+}
+.gradio-container .prose h1, .gradio-container .prose h2, .gradio-container .prose h3,
+.gradio-container .prose h4, .gradio-container .prose strong { color: var(--dd-ink); }
+.dd-section .prose h1 { font-size: 28px; letter-spacing: -0.6px; }
+.gradio-container .prose h3 { font-size: 20px; font-weight: 500; letter-spacing: -0.2px; }
+.gradio-container a, .gradio-container .prose a { color: var(--dd-accent-hover); text-decoration: none; }
+.gradio-container a:hover { text-decoration: underline; }
+.gradio-container .prose code, .gradio-container .prose pre {
+  font-family: var(--font-mono); font-size: 13px; background: var(--dd-s2);
+  color: var(--dd-ink-2); border: 1px solid var(--dd-line); border-radius: 6px;
+}
+.gradio-container .prose pre { padding: 12px; overflow-x: auto; }
+.gradio-container .prose pre code { border: 0; background: transparent; }
+.gradio-container .prose table { display: block; overflow-x: auto; border-collapse: collapse;
+  border: 1px solid var(--dd-line) !important; max-width: 100%; width: max-content; }
+.gradio-container .prose th, .gradio-container .prose td {
+  word-break: normal; overflow-wrap: normal; min-width: 6ch;
+  border: 1px solid var(--dd-line); padding: 8px 12px; color: var(--dd-ink-2);
+}
+.gradio-container .prose th { background: var(--dd-s2); color: var(--dd-ink); font-weight: 500; }
+.gradio-container .prose blockquote {
+  border-left: 2px solid var(--dd-line-3); color: var(--dd-ink-3); padding-left: 12px;
+}
+.gradio-container .prose hr { border-color: var(--dd-line); }
+.dd-eyebrow p, .dd-eyebrow { font-size: 13px !important; font-weight: 500;
+  letter-spacing: 0.4px; text-transform: uppercase; color: var(--dd-ink-3) !important; }
+.dd-lead, .dd-lead p { color: var(--dd-ink-3) !important; font-size: 16px; max-width: 70ch; }
+
+/* Sections: one panel per step */
+.dd-section {
+  background: var(--dd-s1); border: 1px solid var(--dd-line); border-radius: 12px;
+  padding: 24px; gap: 16px; margin-top: 24px; min-width: 0 !important; max-width: 100%;
+  overflow-x: clip;
+}
+.dd-section > .block, .dd-section > .column { min-width: 0 !important; max-width: 100%; contain: inline-size; }
+.dd-section .table-wrap, .dd-section .table-container { max-width: 100%; overflow-x: auto; }
+.dd-section > .block, .dd-section .block { box-shadow: none; }
+.dd-section .block.padded:not(.dd-keep) { background: transparent; }
+.dd-section .form { background: transparent; border: 0; }
+.dd-lead.block, .dd-lead { background: transparent !important; border: 0 !important; padding: 0 !important; }
+.dd-head { background: transparent !important; border: 0 !important; padding: 0 !important; }
+.dd-head h2 { margin-bottom: 0; }
+.dd-head .prose { margin: 0; }
+
+/* Blocks, labels */
+.gradio-container .block { border-radius: 12px; border-color: var(--dd-line); }
+.gradio-container .dd-section .block { background: transparent; border-color: transparent; padding: 0; }
+.gradio-container .dd-section .row { gap: 16px; }
+.gradio-container label > span, .gradio-container span[data-testid="block-info"],
+.gradio-container .block-title, .gradio-container .block-label {
+  color: var(--dd-ink-2) !important; font-size: 14px; font-weight: 500; letter-spacing: 0;
+}
+.gradio-container .block-info, .gradio-container .info { color: var(--dd-ink-3) !important; font-size: 13px; }
+
+/* Inputs: 8px radius, surface-2 fill, hairline, lavender ring on focus */
+.gradio-container input[type="text"], .gradio-container input[type="password"],
+.gradio-container input[type="number"], .gradio-container textarea,
+.gradio-container select {
+  background: var(--dd-s2) !important; color: var(--dd-ink) !important;
+  border: 1px solid var(--dd-line-2) !important; border-radius: 8px !important;
+  font-family: var(--font); font-size: 16px; padding: 8px 12px; min-height: 44px;
+}
+.gradio-container textarea::placeholder, .gradio-container input::placeholder {
+  color: var(--dd-ink-4) !important; opacity: 1;
+}
+.gradio-container input:focus, .gradio-container textarea:focus {
+  border-color: var(--dd-accent) !important; box-shadow: var(--dd-ring) !important; outline: none;
+}
+.gradio-container .wrap-inner { background: var(--dd-s2); border-radius: 8px; color: var(--dd-ink); }
+.gradio-container .wrap-inner { border: 1px solid var(--dd-line-2); min-height: 44px; }
+.gradio-container .wrap-inner:focus-within { border-color: var(--dd-accent); box-shadow: var(--dd-ring); }
+.gradio-container .wrap-inner input { border: 0 !important; box-shadow: none !important;
+  background: transparent !important; min-height: 32px; }
+.gradio-container .token {
+  background: var(--dd-s4); color: var(--dd-ink-2); border: 1px solid var(--dd-line-2);
+  border-radius: 6px; font-size: 13px;
+}
+.gradio-container .token-remove { background: transparent; color: var(--dd-ink-3); }
+.gradio-container .secondary-wrap, .gradio-container .icon-wrap svg { color: var(--dd-ink-3); }
+ul.options, .gradio-container ul.options, body > ul.options {
+  background: var(--dd-s3) !important; border: 1px solid var(--dd-line-3) !important;
+  border-radius: 8px !important; color: var(--dd-ink) !important; box-shadow: none !important;
+}
+ul.options li, .gradio-container ul.options li { color: var(--dd-ink-2) !important; min-height: 40px; }
+ul.options li:hover, ul.options li.active, ul.options li.selected {
+  background: var(--dd-s4) !important; color: var(--dd-ink) !important;
+}
+ul.options li .inner-item, ul.options li span { color: inherit; }
+
+/* Buttons: 8px radius, 14px/500 labels */
+.gradio-container button { font-family: var(--font); letter-spacing: 0; }
+.gradio-container button.lg, .gradio-container button.md, .gradio-container button.sm {
+  border-radius: 8px; font-size: 14px; font-weight: 500; min-height: 44px; padding: 8px 16px;
+}
+.gradio-container button.primary {
+  background: var(--dd-accent) !important; border-color: var(--dd-accent) !important;
+  color: #ffffff !important;
+}
+.gradio-container button.primary:hover { background: var(--dd-accent-hover) !important;
+  border-color: var(--dd-accent-hover) !important; }
+.gradio-container button.primary:active { background: #5e69d1 !important; }
+.gradio-container button.stop, .gradio-container button.secondary {
+  background: var(--dd-s1) !important; border: 1px solid var(--dd-line-2) !important;
+  color: var(--dd-ink) !important;
+}
+.gradio-container button.stop:hover, .gradio-container button.secondary:hover {
+  background: var(--dd-s3) !important; border-color: var(--dd-line-3) !important;
+}
+.dd-actions { gap: 12px !important; flex-wrap: nowrap !important; }
+.dd-actions > * { min-width: 0 !important; }
+.dd-actions button { width: 100%; min-width: 0 !important; }
+.dd-actions > :first-child { flex: 2 1 0; }
+.dd-actions > :last-child { flex: 1 1 0; }
+.dd-actions button.primary { min-height: 48px; font-size: 15px; }
+
+/* Accordions: nested panels on surface-2 */
+.gradio-container .dd-section .block.dd-accordion, .dd-accordion {
+  background: var(--dd-s2) !important; border: 1px solid var(--dd-line) !important;
+  border-radius: 12px !important; padding: 0 !important; overflow: hidden;
+}
+.dd-accordion > .label-wrap, .dd-accordion .label-wrap {
+  color: var(--dd-ink) !important; font-size: 16px; font-weight: 500; min-height: 48px;
+  padding: 12px 16px; background: transparent;
+}
+.dd-accordion .label-wrap:hover { background: var(--dd-s3); }
+.dd-accordion .label-wrap svg, .dd-accordion .label-wrap .icon { color: var(--dd-ink-3); }
+.dd-accordion > div:not(.label-wrap) { padding: 4px 16px 16px; }
+.dd-accordion .block, .dd-accordion .form { background: transparent; }
+
+/* Checkboxes and radios as selectable chips */
+.gradio-container label.svelte-1mhtq7j, .gradio-container .wrap label { color: var(--dd-ink-2); }
+.gradio-container input[type="checkbox"], .gradio-container input[type="radio"] {
+  accent-color: var(--dd-accent); width: 18px; height: 18px; border-color: var(--dd-line-3);
+  background-color: var(--dd-s2);
+}
+.gradio-container input[type="checkbox"]:checked, .gradio-container input[type="radio"]:checked {
+  background-color: var(--dd-accent); border-color: var(--dd-accent);
+}
+.gradio-container .wrap label.checkbox-label, .gradio-container label.checkbox-label,
+.gradio-container fieldset label { min-height: 44px; align-items: center; }
+.gradio-container input[type="range"] { accent-color: var(--dd-accent); }
+.gradio-container input[type="number"] {
+  height: 32px !important; min-height: 32px !important; padding: 4px 8px !important;
+  font-size: 14px; line-height: 1.2; width: 72px; text-align: center;
+}
+.gradio-container .slider_input_container, .gradio-container .head { align-items: center; }
+
+/* Status line and progress log */
+.dd-status, .dd-status p {
+  font-size: 14px; color: var(--dd-ink-2) !important; background: var(--dd-s2);
+  border: 1px solid var(--dd-line); border-radius: 8px; padding: 8px 12px; margin: 0;
+  min-height: 20px;
+}
+.dd-status:not(:has(p)) { display: none; }
+.dd-status p { border: 0; padding: 0; background: transparent; }
+.dd-log textarea {
+  font-family: var(--font-mono) !important; font-size: 13px !important; line-height: 1.5;
+  color: var(--dd-ink-2) !important; background: var(--dd-canvas) !important;
+  border-color: var(--dd-line) !important; min-height: 220px;
+}
+
+/* Row of checkbox + key box + state: bottom-aligned so the three line up */
+.dd-keyrow { align-items: flex-end !important; }
+.dd-keyrow .prose { padding-bottom: 10px; white-space: nowrap; }
+.dd-keyrow > .form { flex-direction: row !important; align-items: flex-end !important;
+  flex: 3 1 0 !important; gap: 16px; flex-wrap: nowrap !important; }
+.dd-keyrow > .form > :first-child { flex: 0 0 140px !important; min-width: 140px !important; }
+.dd-keyrow > .form > :last-child { flex: 1 1 auto !important; min-width: 0 !important; }
+.dd-keyrow > .form > :first-child { align-self: center; padding-bottom: 0; }
+.gradio-container button.sm { white-space: nowrap; }
+
+/* File and dataframe */
+.dd-file .upload-container, .dd-file button.center { min-height: 88px !important; height: auto !important;
+  max-height: 120px; padding: 12px; background: var(--dd-s2); border-color: var(--dd-line-2); }
+.dd-file .upload-container .wrap { height: auto !important; min-height: 0 !important; width: auto !important;
+  background: transparent; color: var(--dd-ink-3); }
+.dd-file .wrap.default.hide, .dd-file .wrap.hide { display: none; }
+.dd-file { min-height: 0 !important; }
+.gradio-container [data-testid="file"], .gradio-container .file-preview-holder,
+.gradio-container .file-preview, .gradio-container table.file-preview {
+  background: var(--dd-s2); color: var(--dd-ink-2);
+}
+.gradio-container .file-preview td, .gradio-container .file-preview a { color: var(--dd-ink-2); }
+.gradio-container .file-preview .download a { color: var(--dd-accent-hover); }
+.gradio-container .table-wrap, .gradio-container .table-container {
+  background: var(--dd-s1); border: 1px solid var(--dd-line); border-radius: 8px;
+}
+.gradio-container table { color: var(--dd-ink-2); }
+.gradio-container thead th, .gradio-container th {
+  background: var(--dd-s2) !important; color: var(--dd-ink) !important; font-weight: 500;
+}
+.gradio-container tbody td { color: var(--dd-ink-2); background: var(--dd-s1); }
+.gradio-container tbody tr:nth-child(even) td { background: var(--dd-s2); }
+.gradio-container .cell-wrap, .gradio-container .cell-menu-button { color: inherit; }
+
+/* Footer and settings links */
+footer, .gradio-container footer { color: var(--dd-ink-3) !important; border-color: var(--dd-line); }
+footer button, footer a { color: var(--dd-ink-3) !important; }
+.toast-wrap .toast-body { background: var(--dd-s3); border: 1px solid var(--dd-line-3); color: var(--dd-ink); }
+.dd-hidden-label label { display: none; }
+
+/* Phone: one column, comfortable tap targets, no horizontal overflow. Gradio prefixes
+   every selector inside a media query, so these use plain class names only. */
+@media (max-width: 768px) {
+  h1 { font-size: 32px; letter-spacing: -0.8px; }
+  .dd-section { padding: 16px; margin-top: 16px; }
+  .row:not(.dd-actions) { flex-direction: column !important; align-items: stretch !important; }
+  .row:not(.dd-actions) > * { width: 100% !important; min-width: 0 !important; flex: 1 1 auto !important; }
+  .dd-accordion > div:not(.label-wrap) { padding: 4px 12px 12px; }
+  .dd-keyrow .prose { padding-bottom: 0; }
+  .dd-keyrow > .form { flex-direction: column !important; align-items: stretch !important; gap: 8px; }
+  .dd-keyrow > .form > * { flex: 0 0 auto !important; min-width: 0 !important; width: 100% !important; }
+}
+""".replace("__SANS__", _SANS).replace("__MONO__", _MONO)
+
+FORCE_DARK_JS = """() => {
+  const dark = () => { document.documentElement.classList.add('dark');
+                       document.body.classList.add('dark'); };
+  dark();
+  new MutationObserver(dark).observe(document.body, {attributes: true, attributeFilter: ['class']});
+}"""
+FORCE_DARK_HEAD = ('<meta name="color-scheme" content="dark">'
+                   '<meta name="theme-color" content="#010102">')
+
+
 # ── Layout ────────────────────────────────────────────────────────────────
 
 def build_demo() -> gr.Blocks:
@@ -569,109 +1115,126 @@ def build_demo() -> gr.Blocks:
         boxes[name] = gr.Textbox(label=key_labels[name], type="password", max_lines=1)
         return boxes[name]
 
-    with gr.Blocks(title="Deep Dog 2") as demo:
+    with gr.Blocks(title="Deep Dog 2",
+                   delete_cache=(CACHE_SWEEP_SECONDS, CACHE_MAX_AGE_SECONDS)) as demo:
+        # Non-secret settings and the last report, kept in the visitor's browser.
+        saved = gr.BrowserState(None, storage_key=SETTINGS_STORAGE_KEY,
+                                secret=SETTINGS_STORAGE_SECRET)
+        gr.Markdown("# Deep Dog 2", elem_classes="dd-head")
         gr.Markdown(
-            "# Deep Dog 2\nAsk a question. A supervisor plans the research, platform agents "
-            "gather sources, and you get a cited report. Keys you type here are used for this "
-            "run only and are not stored.")
-        question = gr.Textbox(label="Research question", lines=3,
-                              placeholder="What are the main benefits and limitations of "
-                                          "sodium-ion batteries for home energy storage?")
-        with gr.Row():
-            run_btn = gr.Button("Run research", variant="primary")
-            stop_btn = gr.Button("Stop", variant="stop")
+            "Ask a question. A supervisor plans the research, platform agents gather sources, "
+            "and you get a cited report. Keys you type here are used for this run only and "
+            "are not stored.", elem_classes="dd-lead")
 
-        with gr.Accordion("Models", open=True):
-            preset = gr.Dropdown(list(PRESETS), value=DEFAULT_PRESET, label="Preset")
-            gr.Markdown("Each role takes an ordered list: the first is tried first, the rest are "
-                        "fallbacks. Pick from the list or type any model name the engine supports. "
-                        "DeepInfra, Together and Fireworks models are listed as "
-                        "`deepinfra:<id>`, `together:<id>` and `fireworks:<id>`; enter their key "
-                        "below to load the live list.")
-            with gr.Row():
-                sup = gr.Dropdown(initial_choices, value=p["sup"], multiselect=True,
-                                  allow_custom_value=True, label="Supervisor")
-                sub = gr.Dropdown(initial_choices, value=p["sub"], multiselect=True,
-                                  allow_custom_value=True, label="Sub-agents")
-                draft = gr.Dropdown(initial_choices, value=p["draft"], multiselect=True,
-                                    allow_custom_value=True, label="Draft and brief")
-            with gr.Row():
-                refresh_btn = gr.Button("Refresh model lists", size="sm", scale=0)
-                models_status = gr.Markdown(
-                    "Model lists: " + model_catalog.status_line(model_catalog.fallback_results()))
-            with gr.Row():
-                route_or = gr.Checkbox(False, label="Route supported models through OpenRouter")
-                thinking = gr.Radio(["auto", "on", "off"], value="auto", label="Thinking mode")
+        # 1. Setup
+        with gr.Column(elem_classes="dd-section", elem_id="dd-setup"):
+            gr.Markdown("## 1. Setup", elem_classes="dd-head")
+            question = gr.Textbox(label="Research question", lines=3,
+                                  placeholder="What are the main benefits and limitations of "
+                                              "sodium-ion batteries for home energy storage?")
+            with gr.Row(elem_classes="dd-actions"):
+                run_btn = gr.Button("Run research", variant="primary")
+                stop_btn = gr.Button("Stop", variant="stop")
 
-        with gr.Accordion("Search tools", open=True):
-            web_on = gr.Checkbox(web_on0, label="Web search on (master switch)")
-            with gr.Row():
-                use_tavily = gr.Checkbox(tavily_on0, label="Tavily", scale=1)
-                key_box("TAVILY_API_KEY")
-                tavily_state = gr.Markdown(search_key_status("TAVILY_API_KEY", ""))
-            with gr.Row():
-                use_exa = gr.Checkbox(exa_on0, label="Exa", scale=1)
-                key_box("EXA_API_KEY")
-                exa_state = gr.Markdown(search_key_status("EXA_API_KEY", ""))
-            ready = gr.Markdown()
+            with gr.Accordion("Models", open=True, elem_classes="dd-accordion"):
+                preset = gr.Dropdown(list(PRESETS), value=DEFAULT_PRESET, label="Preset")
+                gr.Markdown("Each role takes an ordered list: the first is tried first, the rest are "
+                            "fallbacks. Pick from the list or type any model name the engine supports. "
+                            "DeepInfra, Together and Fireworks models are listed as "
+                            "`deepinfra:<id>`, `together:<id>` and `fireworks:<id>`; enter their key "
+                            "below to load the live list.")
+                with gr.Row():
+                    sup = gr.Dropdown(initial_choices, value=p["sup"], multiselect=True,
+                                      allow_custom_value=True, label="Supervisor")
+                    sub = gr.Dropdown(initial_choices, value=p["sub"], multiselect=True,
+                                      allow_custom_value=True, label="Sub-agents")
+                    draft = gr.Dropdown(initial_choices, value=p["draft"], multiselect=True,
+                                        allow_custom_value=True, label="Draft and brief")
+                with gr.Row():
+                    refresh_btn = gr.Button("Refresh model lists", size="sm", scale=0)
+                    models_status = gr.Markdown(
+                        "Model lists: " + model_catalog.status_line(model_catalog.fallback_results()))
+                with gr.Row():
+                    route_or = gr.Checkbox(False, label="Route supported models through OpenRouter")
+                    thinking = gr.Radio(["auto", "on", "off"], value="auto", label="Thinking mode")
 
-        with gr.Accordion("Agents and budget", open=False):
-            agents = gr.CheckboxGroup(AGENT_CHOICES, value=["ResearchWeb"], label="Agents")
-            with gr.Row():
-                minutes = gr.Slider(2, MAX_MINUTES, value=p["minutes"], step=1,
-                                    label="Research time limit (minutes)")
-                iters = gr.Slider(3, 50, value=p["iters"], step=1, label="Supervisor iterations")
-            with gr.Row():
-                searches = gr.Slider(1, 10, value=p["searches"], step=1,
-                                     label="Searches per sub-agent")
-                concurrency = gr.Slider(1, 6, value=3, step=1, label="Parallel sub-agents")
+            with gr.Accordion("Search tools", open=True, elem_classes="dd-accordion"):
+                web_on = gr.Checkbox(web_on0, label="Web search on (master switch)")
+                with gr.Row(elem_classes="dd-keyrow"):
+                    use_tavily = gr.Checkbox(tavily_on0, label="Tavily", scale=1)
+                    key_box("TAVILY_API_KEY")
+                    tavily_state = gr.Markdown(search_key_status("TAVILY_API_KEY", ""))
+                with gr.Row(elem_classes="dd-keyrow"):
+                    use_exa = gr.Checkbox(exa_on0, label="Exa", scale=1)
+                    key_box("EXA_API_KEY")
+                    exa_state = gr.Markdown(search_key_status("EXA_API_KEY", ""))
+                ready = gr.Markdown()
 
-        with gr.Accordion("API keys (this run only)", open=False):
-            with gr.Row():
-                for name in MODEL_KEY_NAMES[:4]:
-                    key_box(name)
-            with gr.Row():
-                for name in MODEL_KEY_NAMES[4:]:
-                    key_box(name)
-            extra = gr.Textbox(label="Other keys, NAME=value separated by semicolons",
-                               type="password", max_lines=1,
-                               info=("Allowed names: " + ", ".join(EXTRA_KEY_NAMES)
-                                     + f". At most {EXTRA_KEYS_MAX_ENTRIES} entries and "
-                                     f"{EXTRA_KEYS_MAX_CHARS} characters. A value cannot "
-                                     "contain a semicolon (it ends the entry)."),
-                               placeholder="REDDIT_CLIENT_ID=...;PUBMED_EMAIL=you@example.com")
-        key_boxes = [boxes[name] for name, _ in KEY_FIELDS]  # run_ui's key1..keyN order
+            with gr.Accordion("Agents and budget", open=False, elem_classes="dd-accordion"):
+                agents = gr.CheckboxGroup(AGENT_CHOICES, value=["ResearchWeb"], label="Agents")
+                with gr.Row():
+                    minutes = gr.Slider(2, MAX_MINUTES, value=p["minutes"], step=1,
+                                        label="Research time limit (minutes)")
+                    iters = gr.Slider(3, 50, value=p["iters"], step=1,
+                                      label="Supervisor iterations")
+                with gr.Row():
+                    searches = gr.Slider(1, 10, value=p["searches"], step=1,
+                                         label="Searches per sub-agent")
+                    concurrency = gr.Slider(1, 6, value=3, step=1, label="Parallel sub-agents")
 
-        with gr.Accordion("Tracing (LangSmith)", open=False):
-            ls_on = gr.Checkbox(False, label="Trace this run in LangSmith")
-            gr.Markdown(
-                "**Privacy:** tracing sends the prompts, search results and the final report of "
-                "this run to your LangSmith account, into the project named below. It is off "
-                "unless you tick the box. Your LangSmith key is used for this run only and is "
-                "not stored.")
-            with gr.Row():
-                ls_key = gr.Textbox(label="LangSmith API key", type="password", max_lines=1)
-                ls_region = gr.Dropdown(LANGSMITH_REGION_CHOICES, value=LANGSMITH_DEFAULT_REGION,
-                                        allow_custom_value=False, filterable=False,
-                                        label="LangSmith region")
-            ls_project = gr.Textbox(label="LangSmith project", value=LANGSMITH_DEFAULT_PROJECT,
-                                    max_length=LANGSMITH_PROJECT_MAX_CHARS, max_lines=1)
-            ls_state = gr.Markdown(langsmith_hint(False, ""))
+            with gr.Accordion("API keys (this run only)", open=False, elem_classes="dd-accordion"):
+                with gr.Row():
+                    for name in MODEL_KEY_NAMES[:4]:
+                        key_box(name)
+                with gr.Row():
+                    for name in MODEL_KEY_NAMES[4:]:
+                        key_box(name)
+                extra = gr.Textbox(label="Other keys, NAME=value separated by semicolons",
+                                   type="password", max_lines=1,
+                                   info=("Allowed names: " + ", ".join(EXTRA_KEY_NAMES)
+                                         + f". At most {EXTRA_KEYS_MAX_ENTRIES} entries and "
+                                         f"{EXTRA_KEYS_MAX_CHARS} characters. A value cannot "
+                                         "contain a semicolon (it ends the entry)."),
+                                   placeholder="REDDIT_CLIENT_ID=...;PUBMED_EMAIL=you@example.com")
+            key_boxes = [boxes[name] for name, _ in KEY_FIELDS]  # run_ui's key1..keyN order
+
+            with gr.Accordion("Tracing (LangSmith)", open=False, elem_classes="dd-accordion"):
+                ls_on = gr.Checkbox(False, label="Trace this run in LangSmith")
+                gr.Markdown(
+                    "**Privacy:** tracing sends the prompts, search results and the final report "
+                    "of this run to your LangSmith account, into the project named below. It is "
+                    "off unless you tick the box. Your LangSmith key is used for this run only "
+                    "and is not stored.")
+                with gr.Row():
+                    ls_key = gr.Textbox(label="LangSmith API key", type="password", max_lines=1)
+                    ls_region = gr.Dropdown(LANGSMITH_REGION_CHOICES,
+                                            value=LANGSMITH_DEFAULT_REGION,
+                                            allow_custom_value=False, filterable=False,
+                                            label="LangSmith region")
+                ls_project = gr.Textbox(label="LangSmith project", value=LANGSMITH_DEFAULT_PROJECT,
+                                        max_length=LANGSMITH_PROJECT_MAX_CHARS, max_lines=1)
+                ls_state = gr.Markdown(langsmith_hint(False, ""))
         ls_boxes = [ls_on, ls_key, ls_project, ls_region]  # run_ui's ls_* order
 
-        status = gr.Markdown()
-        with gr.Tabs():
-            with gr.Tab("Report"):
-                report = gr.Markdown(label="Report")
-                download = gr.File(label="Download report (.md)")
-            with gr.Tab("Sources"):
-                sources = gr.Dataframe(headers=["Code", "Title", "URL"], interactive=False,
-                                       wrap=True)
-            with gr.Tab("Progress"):
-                log = gr.Textbox(label="Events", lines=16, max_lines=16, autoscroll=True,
-                                 interactive=False)
+        # 2. Progress: always on the page, between the setup and the results.
+        with gr.Column(elem_classes="dd-section", elem_id="dd-progress"):
+            gr.Markdown("## 2. Progress", elem_classes="dd-head")
+            status = gr.Markdown(elem_classes="dd-status")
+            log = gr.Textbox(label="Events", lines=10, max_lines=10, autoscroll=True,
+                             interactive=False, elem_classes="dd-log")
 
-        preset.change(apply_preset, preset,
+        # 3. Report and sources
+        with gr.Column(elem_classes="dd-section", elem_id="dd-results"):
+            gr.Markdown("## 3. Report and Sources", elem_classes="dd-head")
+            report = gr.Markdown(label="Report")
+            download = gr.File(label="Download report (.md)", elem_classes="dd-file")
+            gr.Markdown("### Sources", elem_classes="dd-head")
+            sources = gr.Dataframe(headers=["Code", "Title", "URL"], interactive=False,
+                                   wrap=True, type="array")
+
+        # .input, not .change: restoring a saved page sets this box from code and must not
+        # re-apply the preset over the restored model and budget values.
+        preset.input(apply_preset, preset,
                       [sup, sub, draft, minutes, iters, searches, web_on, use_tavily, use_exa],
                       api_name=False)
 
@@ -707,7 +1270,20 @@ def build_demo() -> gr.Blocks:
         inputs = [question, sup, sub, draft, route_or, thinking, minutes, iters, searches,
                   concurrency, agents, web_on, use_tavily, use_exa, *key_boxes, extra, *ls_boxes]
         run_btn.click(run_ui, inputs, [status, log, report, sources, download],
-                      show_progress="hidden", api_name=False)
+                      show_progress="hidden", api_name=False).then(
+            store_report, [report, sources, download, saved], saved,
+            show_progress="hidden", api_name=False)
+
+        # Remember non-secret settings in the browser; restore them (and the last report)
+        # on page load. The key boxes and the LangSmith key are not inputs here.
+        setting_boxes = [question, preset, sup, sub, draft, route_or, thinking, minutes, iters,
+                         searches, concurrency, agents, web_on, use_tavily, use_exa, ls_on,
+                         ls_project, ls_region]
+        for control in setting_boxes:
+            control.change(save_settings, [saved, *setting_boxes], saved, api_name=False,
+                           show_progress="hidden", trigger_mode="always_last")
+        demo.load(restore_settings, saved, [*setting_boxes, report, sources],
+                  api_name=False, show_progress="hidden")
         stop_btn.click(stop_run, None, status, api_name=False)
     demo.queue(default_concurrency_limit=MAX_CONCURRENT_RUNS)
     return demo
@@ -731,7 +1307,9 @@ def main() -> None:
     args = ap.parse_args()
     # ssr_mode=False: server-side rendering needs Node, which the slim image lacks.
     build_demo().launch(server_name=args.host, server_port=args.port, auth=_auth(),
-                        theme=gr.themes.Soft(), footer_links=["gradio"], ssr_mode=False)
+                        theme=build_theme(), css=CSS, js=FORCE_DARK_JS, head=FORCE_DARK_HEAD,
+                        footer_links=["gradio"], ssr_mode=False,
+                        allowed_paths=[str(report_root())])
 
 
 if __name__ == "__main__":

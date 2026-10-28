@@ -107,8 +107,9 @@ def test_search_key_status(monkeypatch):
     assert ui.search_key_status("EXA_API_KEY", "") == "no key"
     assert ui.search_key_status("EXA_API_KEY", "   ") == "no key"
     assert ui.search_key_status("EXA_API_KEY", "typed") == "key entered"
+    # A server-side key is neither used nor reported: web runs use typed keys only.
     monkeypatch.setenv("EXA_API_KEY", "server")
-    assert ui.search_key_status("EXA_API_KEY", "") == "server key available"
+    assert ui.search_key_status("EXA_API_KEY", "") == "no key"
     assert ui.search_key_status("EXA_API_KEY", "typed") == "key entered"
 
 
@@ -152,10 +153,12 @@ def test_hosted_provider_models_ask_for_their_own_key():
     assert status(sup=chain, key_values=with_key)[2] == "Ready"
 
 
-def test_a_server_side_key_counts(monkeypatch):
+def test_a_server_side_key_does_not_count(monkeypatch):
     monkeypatch.setenv("EXA_API_KEY", "server-exa")
     tavily, exa, line = status(key_values=keys(DEEPSEEK_API_KEY=DS))
-    assert (tavily, exa, line) == ("no key", "server key available", "Ready")
+    assert (tavily, exa, line) == ("no key", "no key", "Missing keys: EXA_API_KEY")
+    # Typing the key makes the same setup ready.
+    assert status(key_values=keys(DEEPSEEK_API_KEY=DS, EXA_API_KEY="typed-exa"))[2] == "Ready"
 
 
 def test_bad_selections_give_a_short_message_not_an_error():
