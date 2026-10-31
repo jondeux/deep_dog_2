@@ -3,13 +3,17 @@
 Volatile layer: measured facts, known issues, work in flight. Regenerate the snapshot with `bash scripts/state_snapshot.sh` and paste it over the block below; write the other sections by hand.
 
 ## Measured snapshot
-- **Taken:** 2026-10-31 by hand (state_snapshot.sh needs pytest, which this container lacked)
-- **Commit:** ee1db95 on `main`; branch `claude/setup-suite` adds hooks and memory
-- **Tests:** not run: `No module named pytest`. The setup script must install `.[dev]`
-- **trail:** not installed in this container; `.trail/learnings` holds 4 learnings
+- **Taken:** 2026-10-31T23:36Z by scripts/state_snapshot.sh
+- **Commit:** 2ce13fc on `claude/setup-suite` (plus the install_deps hook, committed after)
+- **Tests:** 2 failed, 1239 passed in 109.78s
+- **Failing test IDs** (already failing; `scripts/simple_research.py` has no `QUESTION` attribute, which the test expects):
+  - `tests/test_simple_research.py::test_simple_example[completed-0]`
+  - `tests/test_simple_research.py::test_simple_example[partial-1]`
+- **trail check:** no conflicts. **Trail learnings:** 4
 
 ## Known issues
-- `.claude/` was fully gitignored, so trail's SessionStart hook (`.trail/hook.cjs`) never reached fresh clones. `claude/setup-suite` narrows the ignore to allow `settings.json`, `hooks-policy.json`, and `hooks/`. Run `trail init --yes --no-global` once in a session to register trail's hook alongside the guard.
+- `test_simple_example` x2: the test patches `simple_research.QUESTION`, which the script no longer defines.
+- trail isn't installed in the container until the environment's setup script carries the `trail` module; then run `trail init --yes --no-global` once to register trail's SessionStart hook next to the guard.
 
 ## In flight
-- `claude/setup-suite`: hooks-architect guard and approval gate, plus this memory layer. Pushed; no PR yet.
+- `claude/setup-suite`: guard and approval hooks, this memory layer, and `scripts/install_deps.sh` (SessionStart, cloud only; installs `.[dev]` + `webui/requirements-ui.txt` in the background, about 36 s when cold, then skipped while inputs are unchanged).

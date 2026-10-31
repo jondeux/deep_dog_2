@@ -48,6 +48,19 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/scripts/install_deps.sh"
+            ],
+            "timeout": 15
+          }
+        ]
       }
     ]
   },
