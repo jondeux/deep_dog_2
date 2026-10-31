@@ -28,7 +28,10 @@ test_data/
 rerun/
 
 # Local-only configuration
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks-policy.json
+!.claude/hooks/
 
 # Operating-system files
 .DS_Store

@@ -1,0 +1,10 @@
+{
+  "commands": [
+    {"id": "trail-init-flags", "cmd": ["trail"], "args_regex": "^init\\b(?!.*--yes.*--no-global)(?!.*--no-global.*--yes)",
+     "decision": "deny", "reason": "Run trail init with both --yes and --no-global."},
+    {"id": "trail-init-dry-run", "cmd": ["trail"], "args_regex": "^init\\b.*--dry-run.*--no-global|^init\\b.*--no-global.*--dry-run",
+     "decision": "deny", "reason": "--dry-run with --no-global is not allowed."}
+  ],
+  "context": {"files": ["claude/project-state.md"]},
+  "stop": {"command": "python3 -m pytest -q -x", "timeout": 600}
+}

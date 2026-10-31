@@ -1,0 +1,77 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "-I",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks-architect/guard.py"
+            ],
+            "timeout": 10,
+            "onFailure": "block",
+            "statusMessage": "Checking guardrails"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "-I",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks-architect/approval_mark.py"
+            ],
+            "timeout": 10,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "-I",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks-architect/session_context.py"
+            ],
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/*.pem)",
+      "Read(**/id_rsa*)",
+      "Read(**/id_ed25519*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push --mirror *)"
+    ],
+    "ask": [
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
+      "Bash(git stash *)",
+      "Bash(git branch -D *)"
+    ]
+  }
+}
