@@ -32,6 +32,7 @@ rerun/
 !.claude/settings.json
 !.claude/hooks-policy.json
 !.claude/hooks/
+!.claude/skills/
 
 # Operating-system files
 .DS_Store

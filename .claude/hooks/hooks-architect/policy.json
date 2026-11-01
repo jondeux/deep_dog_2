@@ -104,7 +104,7 @@
 
   "stop": {"command": "", "subdir": "", "timeout": 300, "max_blocks": 3, "guard_test_edits": true,
            "test_globs": ["tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/*.test.*", "**/*.spec.*"],
-           "max_output_chars": 3000},
+           "max_output_chars": 3000, "tickets": "", "check_id": "stop"},
 
   "audit": {"path": ".claude/logs/hooks-audit.jsonl", "max_field_chars": 300}
 }

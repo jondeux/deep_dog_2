@@ -9,6 +9,7 @@ Pending candidates: 0 (see [candidates](candidates.md); the user approves with "
 - [Goal progress](goal-progress.md): key-result status with dates and evidence.
 - [Decisions](decisions.md): what was decided, why, and how to undo it.
 - [Candidates](candidates.md): proposed rules waiting for the user's approval.
+- [Failures](failures.md): metadata tickets from failed turns; /learn drafts candidates for open ones.
 
 ## Elsewhere
 - [.trail/learnings](../../.trail/learnings/): trail learnings: one file per saved learning

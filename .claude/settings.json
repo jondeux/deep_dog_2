@@ -1,5 +1,50 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/scripts/install_deps.sh"
+            ],
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "-I",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks-architect/session_context.py"
+            ],
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "-I",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/continuous-learning/learn.py",
+              "status",
+              "--project",
+              "${CLAUDE_PROJECT_DIR}"
+            ],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell|Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob",
@@ -34,31 +79,18 @@
         ]
       }
     ],
-    "SessionStart": [
+    "Stop": [
       {
-        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
             "command": "python3",
             "args": [
               "-I",
-              "${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks-architect/session_context.py"
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks-architect/stop_checks.py"
             ],
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "startup|resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash",
-            "args": [
-              "${CLAUDE_PROJECT_DIR}/scripts/install_deps.sh"
-            ],
-            "timeout": 15
+            "timeout": 330,
+            "statusMessage": "Running stop checks"
           }
         ]
       }
