@@ -16,3 +16,4 @@ Pending candidates: 0 (see [candidates](candidates.md); the user approves with "
 
 ## Entries
 <!-- One line each: "- <fact or pointer> (updated YYYY-MM-DD)". Merge or drop stale lines. -->
+- trail wired 2026-11-01 (`trail init --yes --no-global`): one fail-open SessionStart hook in .claude/settings.json, graph 1,197 nodes / 77 files, cache git-ignored; guard probe 14/14 after (updated 2026-11-01)
