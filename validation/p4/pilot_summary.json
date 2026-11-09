@@ -1,0 +1,73 @@
+{
+ "status": "completed",
+ "error": null,
+ "seconds": 221.5,
+ "governor": {
+  "calls": 21,
+  "est_cost_usd": 0.551323,
+  "util": {
+   "five_hour": 0.4,
+   "seven_day": 0.14
+  },
+  "stopped": null,
+  "hooks_seen": 0,
+  "by_model": {
+   "claude-sonnet-5-5": {
+    "calls": 6,
+    "cost": 0.484111,
+    "input_tokens": 105460,
+    "output_tokens": 18226
+   },
+   "claude-haiku-5-5": {
+    "calls": 11,
+    "cost": 0.013523,
+    "input_tokens": 66718,
+    "output_tokens": 8850
+   },
+   "claude-haiku-5-5+WebSearch": {
+    "calls": 4,
+    "cost": 0.053687,
+    "input_tokens": 24535,
+    "output_tokens": 6344
+   }
+  }
+ },
+ "event_types": [
+  "citations_validated",
+  "config_validated",
+  "delegation_started",
+  "draft_completed",
+  "draft_started",
+  "report_started",
+  "run_completed",
+  "run_started",
+  "scope_completed",
+  "scope_started",
+  "source_found",
+  "source_read",
+  "source_saved",
+  "subagent_completed",
+  "subagent_started",
+  "supervisor_iteration"
+ ],
+ "event_count": 43,
+ "order_ok": true,
+ "report_chars": 22973,
+ "inline_citations": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11
+ ],
+ "sources_listed": 11,
+ "citations_all_in_sources": true,
+ "iterations": 3,
+ "delegations": 4
+}

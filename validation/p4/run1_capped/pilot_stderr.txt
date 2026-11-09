@@ -1,0 +1,3 @@
+WEB_SEARCH_ENGINE='exa' but EXA_API_KEY not set in .env — those search tools are not available to the web/general agents.
+Fallback: agent did not call batch_save_selected — auto-selecting most recently read items
+Fallback: agent did not call batch_save_selected — auto-selecting most recently read items

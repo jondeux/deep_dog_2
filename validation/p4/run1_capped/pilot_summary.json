@@ -1,0 +1,40 @@
+{
+ "status": "partial",
+ "error": "GovernorStop: RESOURCE_EXHAUSTED: claude-code governor stop (usd_cap): list-price estimate $0.6010 >= cap $0.60",
+ "seconds": 239.3,
+ "governor": {
+  "calls": 39,
+  "est_cost_usd": 0.600959,
+  "util": {
+   "five_hour": 0.37,
+   "seven_day": 0.13
+  },
+  "stopped": "usd_cap",
+  "hooks_seen": 0
+ },
+ "event_types": [
+  "config_validated",
+  "delegation_started",
+  "draft_completed",
+  "draft_started",
+  "report_started",
+  "run_failed",
+  "run_started",
+  "scope_completed",
+  "scope_started",
+  "source_found",
+  "source_read",
+  "source_saved",
+  "subagent_completed",
+  "subagent_started",
+  "supervisor_iteration"
+ ],
+ "event_count": 70,
+ "order_ok": true,
+ "report_chars": 0,
+ "inline_citations": [],
+ "sources_listed": 0,
+ "citations_all_in_sources": false,
+ "iterations": 4,
+ "delegations": 8
+}

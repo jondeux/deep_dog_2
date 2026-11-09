@@ -136,3 +136,59 @@ def _fast_ui_poll(monkeypatch):
     app = sys.modules.get("webui.app")
     if app is not None:
         monkeypatch.setattr(app, "_POLL_SECONDS", 0.05)
+
+
+# ── Free tests must never launch a real `claude` ───────────────────────────────
+# A stub `claude` goes first on PATH. If a test reaches it, it writes a sentinel and the session fails.
+# Tests that exercise the claudecode: provider use the `fake_claude` fixture (DEEPDOG_CLAUDE_BIN) instead.
+@pytest.fixture(autouse=True, scope="session")
+def _no_real_claude(tmp_path_factory):
+    import os, stat
+    d = tmp_path_factory.mktemp("claude-net")
+    sentinel = d / "claude_was_called"
+    stub = d / "claude"
+    stub.write_text(f"#!/bin/sh\necho called > {sentinel}\nexit 99\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    old = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{d}{os.pathsep}{old}"
+    os.environ.pop("DEEPDOG_CLAUDE_BIN", None)
+    yield
+    os.environ["PATH"] = old
+    assert not sentinel.exists(), "a free test launched a real `claude` (it reached the PATH stub)"
+
+
+@pytest.fixture
+def fake_claude(tmp_path, monkeypatch):
+    """Point the provider at tests/fake_claude.py. Returns a helper: ``fc.script([...])``, ``fc.calls()``."""
+    import json, os, stat, sys
+    from deep_research.providers.claude_code import preflight
+    from deep_research.providers.claude_code.runtime import _governor_var
+    wrapper = tmp_path / "claude"
+    wrapper.write_text(f'#!/bin/sh\nexec {sys.executable} {os.path.join(os.path.dirname(__file__), "fake_claude.py")} "$@"\n')
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
+    paths = {"script": tmp_path / "script.json", "state": tmp_path / "state", "log": tmp_path / "log.jsonl"}
+    monkeypatch.setenv("DEEPDOG_CLAUDE_BIN", str(wrapper))
+    monkeypatch.setenv("DEEPDOG_CC_FAKE_SCRIPT", str(paths["script"]))
+    monkeypatch.setenv("DEEPDOG_CC_FAKE_STATE", str(paths["state"]))
+    monkeypatch.setenv("DEEPDOG_CC_FAKE_LOG", str(paths["log"]))
+    preflight._cache.clear()
+
+    class FC:
+        bin = str(wrapper)
+
+        def script(self, responses):
+            paths["script"].write_text(json.dumps(responses))
+            paths["state"].write_text("0")
+
+        def calls(self):
+            if not paths["log"].exists():
+                return []
+            rows = [json.loads(l) for l in paths["log"].read_text().splitlines() if l.strip()]
+            starts = [r for r in rows if "argv" in r]
+            ends = {r["pid"]: r["end"] for r in rows if "end" in r}
+            for r in starts:
+                r["end"] = ends.get(r["pid"])
+            return starts
+
+    yield FC()
+    preflight._cache.clear()

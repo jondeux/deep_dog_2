@@ -1,4 +1,27 @@
 {
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/*.pem)",
+      "Read(**/id_rsa*)",
+      "Read(**/id_ed25519*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push --mirror *)"
+    ],
+    "ask": [
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
+      "Bash(git stash *)",
+      "Bash(git branch -D *)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -142,27 +165,15 @@
       }
     ]
   },
-  "permissions": {
-    "deny": [
-      "Read(**/.env)",
-      "Read(**/.env.local)",
-      "Read(**/.env.*.local)",
-      "Read(**/*.pem)",
-      "Read(**/id_rsa*)",
-      "Read(**/id_ed25519*)",
-      "Read(~/.ssh/**)",
-      "Read(~/.aws/**)",
-      "Bash(git push --force *)",
-      "Bash(git push -f *)",
-      "Bash(git push --mirror *)"
-    ],
-    "ask": [
-      "Bash(git reset --hard *)",
-      "Bash(git clean *)",
-      "Bash(git checkout -- *)",
-      "Bash(git restore *)",
-      "Bash(git stash *)",
-      "Bash(git branch -D *)"
-    ]
+  "extraKnownMarketplaces": {
+    "rea": {
+      "source": {
+        "source": "github",
+        "repo": "morluto/rea"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "rea@rea": true
   }
 }

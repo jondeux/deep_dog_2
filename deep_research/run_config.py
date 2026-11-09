@@ -89,6 +89,16 @@ class RunConfig:
     draft_report_reasoning_effort: str = _cfg.DRAFT_REPORT_REASONING_EFFORT
     thinking_mode: str = _cfg.THINKING_MODE   # "auto" | "on" | "off"
 
+    # ── Claude subscription provider ("claudecode:<model>[@<effort>]") ─
+    # Caps for runs whose models go through the owner's own `claude` CLI sign-in. The plan-window guard
+    # stops BEFORE the window is exhausted; the USD figure is the list-price estimate the binary reports.
+    claude_code_plan_window_max: float = 0.8
+    claude_code_usd_cap: Optional[float] = 5.0
+    claude_code_max_concurrent: int = 3
+    claude_code_timeout_seconds: int = 600
+    # Search backend for web_search_engine="claude": Claude's own WebSearch tool, run by this model.
+    claude_search_model: str = "claudecode:haiku-5.5@low"
+
     # ── Research timing (minutes) ──────────────────────────────────────
     research_time_min_minutes: float = _cfg.RESEARCH_TIME_MIN_MINUTES
     research_time_max_minutes: float = _cfg.RESEARCH_TIME_MAX_MINUTES
@@ -115,7 +125,7 @@ class RunConfig:
         default_factory=lambda: list(_cfg.GENERAL_AGENT_PLATFORMS))
 
     # ── Web search ─────────────────────────────────────────────────────
-    web_search_engine: str = _cfg.WEB_SEARCH_ENGINE          # "tavily"|"exa"|"both"
+    web_search_engine: str = _cfg.WEB_SEARCH_ENGINE          # "tavily"|"exa"|"both"|"claude"
     exa_search_max_chars: int = _cfg.EXA_SEARCH_MAX_CHARS
     fetch_url_max_chars: int = _cfg.FETCH_URL_MAX_CHARS
 

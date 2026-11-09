@@ -81,7 +81,7 @@ def _save_output_to_db(output_data: dict) -> None:
 
 
 async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
-                       clean_output: bool = False) -> Dict[str, Any]:
+                       clean_output: bool = False, config: RunConfig = None) -> Dict[str, Any]:
     """
     Run the Deep Research agent and save the output to a file.
 
@@ -90,6 +90,7 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
         output_dir: Directory to save the output file
         thread_id: Optional thread ID for the research session
         clean_output: If True, write only the final report (no header/brief)
+        config: Optional RunConfig (e.g. from the model picker); default is RunConfig().finalize()
 
     Returns:
         Dictionary with:
@@ -112,7 +113,7 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
     logger.info(f"Starting research with thread ID: {thread_id}")
     logger.info(f"Output will be saved to: {output_file}")
 
-    cfg = RunConfig().finalize()
+    cfg = (config or RunConfig()).finalize()
     result = await engine_run_research(
         prompt,
         config=cfg,
@@ -270,7 +271,7 @@ Examples:
         """,
     )
 
-    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group = parser.add_mutually_exclusive_group(required=False)
     input_group.add_argument(
         "--prompt", "-p",
         type=str,
@@ -295,7 +296,46 @@ Examples:
         help="Thread ID for the research session (default: auto-generated timestamp)",
     )
 
+    picker = parser.add_argument_group(
+        "model picker (Claude subscription)",
+        "Run every LLM call through the unmodified `claude` CLI on YOUR OWN plan. Personal use only. "
+        "Models: haiku-5.5, sonnet-5.5, opus-5.5. Efforts: low, medium, high, xhigh, max.")
+    picker.add_argument("--preset", help="economy (default when any picker flag is used), benchmark, custom, "
+                                         "testing-framework")
+    for role in ("supervisor", "draft", "subagent"):
+        picker.add_argument(f"--{role}-model", help=f"model for the {role} role")
+        picker.add_argument(f"--{role}-effort", help=f"reasoning effort for the {role} role")
+    picker.add_argument("--search", default="claude", help="web search backend: claude (default, no key), exa, tavily, both")
+    picker.add_argument("--list-presets", action="store_true", help="show the presets and exit")
+
     args = parser.parse_args()
+
+    if args.list_presets:
+        from deep_research import model_picker
+        for name in model_picker.PRESETS:
+            print(model_picker.describe(name) + ("   (default)" if name == model_picker.DEFAULT_PRESET else ""))
+        return
+
+    if not args.prompt and not args.prompt_file:
+        parser.error("one of the arguments --prompt/-p --prompt-file/-f is required")
+
+    picked = None
+    wants_picker = args.preset or any(getattr(args, f"{r}_{k}") for r in ("supervisor", "draft", "subagent")
+                                      for k in ("model", "effort"))
+    if wants_picker:
+        from deep_research import model_picker
+        overrides = {}
+        try:
+            base = model_picker.choices(args.preset or model_picker.DEFAULT_PRESET)
+            for role in ("supervisor", "draft", "subagent"):
+                m, e = getattr(args, f"{role}_model"), getattr(args, f"{role}_effort")
+                if m or e:
+                    cur = base.get(role) or base["supervisor"]
+                    overrides[role] = (m or cur[0], e or cur[1])
+            picked = model_picker.apply_preset(RunConfig(), args.preset or model_picker.DEFAULT_PRESET, search=args.search, **overrides)
+        except ValueError as e:
+            parser.error(str(e))
+        print("Models: " + model_picker.describe(args.preset or model_picker.DEFAULT_PRESET, **overrides))
 
     if args.prompt:
         prompt = args.prompt
@@ -316,7 +356,7 @@ Examples:
     output_dir = Path(args.output_dir)
 
     try:
-        result = asyncio.run(run_research(prompt, output_dir, args.thread_id))
+        result = asyncio.run(run_research(prompt, output_dir, args.thread_id, config=picked))
         print(f"\n✅ Research complete! Output saved to: {result['output_file']}")
     except KeyboardInterrupt:
         logger.info("Research interrupted by user")

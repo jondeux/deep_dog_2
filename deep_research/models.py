@@ -19,6 +19,7 @@ every iteration.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -85,6 +86,18 @@ class ModelFactory:
         self.config = config
         self.credentials = credentials or Credentials(keys={})
         self._cache: dict[tuple, Any] = {}
+        self._governor = None
+
+    @property
+    def governor(self):
+        """Per-run caps and usage counters for ``claudecode:`` models (created on first use)."""
+        if self._governor is None:
+            from deep_research.providers.claude_code import Governor
+            c = self.config
+            self._governor = Governor(
+                plan_window_max=c.claude_code_plan_window_max, usd_cap=c.claude_code_usd_cap,
+                max_concurrent=c.claude_code_max_concurrent, timeout_s=c.claude_code_timeout_seconds)
+        return self._governor
 
     # ── public role builders ───────────────────────────────────────────
     def supervisor(self, tools: Optional[list] = None, *, max_tokens: Optional[int] = 32000,
@@ -114,7 +127,11 @@ class ModelFactory:
             reasoning_effort: Optional[str] = None, route_via_openrouter: Optional[bool] = None):
         """Single model by name (route honours this run's config by default)."""
         route = bool(self.config.route_via_openrouter) if route_via_openrouter is None else bool(route_via_openrouter)
-        with _cfg.credential_scope(self.credentials):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(_cfg.credential_scope(self.credentials))
+            if isinstance(model_name, str) and model_name.lower().startswith("claudecode:"):
+                from deep_research.providers.claude_code import governor_scope
+                stack.enter_context(governor_scope(self.governor))
             return _cfg.get_model(
                 model_name,
                 temperature=temperature,
@@ -146,6 +163,10 @@ class ModelFactory:
             self._cache[key] = model
         return model
 
+    @staticmethod
+    def _uses_claude_code(kind, chain, tools) -> bool:
+        return any(isinstance(n, str) and n.lower().startswith("claudecode:") for n in chain)
+
     def _build(self, kind: str, *, tools, max_tokens, temperature, chain,
                reasoning_effort, route):
         common = dict(
@@ -154,7 +175,11 @@ class ModelFactory:
             thinking_mode=self.config.thinking_mode,
             disable_fallback=self.config.disable_model_fallback,
         )
-        with _cfg.credential_scope(self.credentials):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(_cfg.credential_scope(self.credentials))
+            if self._uses_claude_code(kind, chain, tools):
+                from deep_research.providers.claude_code import governor_scope
+                stack.enter_context(governor_scope(self.governor))
             if kind == "supervisor":
                 return _cfg.get_supervisor_model(
                     tools=tools, chain=list(chain),

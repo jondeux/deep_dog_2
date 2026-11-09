@@ -918,6 +918,8 @@ def model_required_keys(model_name: str, route_via_openrouter: bool = False) -> 
     Alternative spellings are listed so validation can accept any of them
     (e.g. DEEPSEEK_API_KEY or DEEPSEEK_KEY).
     """
+    if model_name.lower().startswith("claudecode:"):
+        return []          # signs in through the owner's own `claude` binary; no API key is involved
     if ":" in model_name and model_name.find(":") in _HOSTED_PREFIX_LENGTHS:
         # Explicit hosted-provider prefix beats every other rule, OpenRouter included.
         hosted, _ = _hosted_provider(model_name)
@@ -1163,6 +1165,14 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
             or reasoning_effort is not a valid value.
     """
     model_lower = model_name.lower()
+
+    # "claudecode:<model>[@<effort>]": the unmodified `claude` CLI on the owner's own plan. Checked first,
+    # before effort validation: it accepts the CLI's levels (low..max), not just low/medium/high.
+    if model_lower.startswith("claudecode:"):
+        from deep_research.providers.claude_code import build_chat_model
+        return build_chat_model(model_name, temperature=temperature, max_tokens=max_tokens,
+                                reasoning_effort=reasoning_effort)
+
     _route = ROUTE_VIA_OPENROUTER if route_via_openrouter is None else bool(route_via_openrouter)
     _eff_mode = THINKING_MODE if thinking_mode is None else thinking_mode
 

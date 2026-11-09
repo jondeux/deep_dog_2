@@ -217,6 +217,11 @@ def langsmith_endpoint(region) -> str:
 
 def build_config(sup, sub, draft, route_or, thinking, minutes, iters, searches,
                  concurrency, agents, engine, ls_on=False, ls_project="") -> RunConfig:
+    for chain in (sup, sub, draft):
+        if any(str(n).strip().lower().startswith("claudecode:") for n in chain):
+            # Personal-use provider: it would spend the OWNER's Claude plan for whoever uses this page.
+            raise ValueError("Claude subscription models (claudecode:) are for the owner's personal use "
+                             "from the command line. They are not available in the web UI.")
     minutes = min(float(minutes), float(MAX_MINUTES))
     return RunConfig(
         supervisor_model_fallback_chain=list(sup),

@@ -1,0 +1,116 @@
+{
+ "d_httpx_fetch": {
+  "results": {
+   "https://example.com": 200,
+   "https://en.wikipedia.org/wiki/Sodium-ion_battery": 403,
+   "https://arxiv.org/abs/1706.03762": 200
+  },
+  "pass_": false
+ },
+ "a_clean_model": {
+  "ok": true,
+  "reply": "SQUAWK",
+  "init": {
+   "tools": [],
+   "mcp_servers": [],
+   "slash_commands_n": 0,
+   "agents": [
+    "claude",
+    "claude-code-guide",
+    "Explore",
+    "general-purpose",
+    "Plan",
+    "statusline-setup"
+   ],
+   "model": "claude-haiku-5-5",
+   "permissionMode": "dontAsk",
+   "apiKeySource": "none",
+   "version": "2.1.321"
+  },
+  "cost": 0.0001776,
+  "rc": 0,
+  "pass_": true
+ },
+ "b_tool_calls": {
+  "names": [
+   "Search",
+   "Search",
+   "Calc"
+  ],
+  "args": [
+   {
+    "q": "population of Lisbon"
+   },
+   {
+    "q": "height of Mount Kosciuszko"
+   },
+   {
+    "expression": "17*23"
+   }
+  ],
+  "cost": 0.0002998,
+  "calls": 1,
+  "pass_": true
+ },
+ "b2_schema_mode": {
+  "brief": "How do sodium-ion batteries compare to lithium-ion batteries for residential (home) energy storage? Evaluate cost per kW",
+  "target_language": "English",
+  "cost": 0.0003597,
+  "calls": 1,
+  "pass_": true
+ },
+ "f_rate_limit_event": {
+  "util": {
+   "five_hour": 0.29,
+   "seven_day": 0.12
+  },
+  "pass_": true
+ },
+ "g_hooks_in_children": {
+  "hooks_default_flags": 0,
+  "hooks_control_no_disable": 7,
+  "slash_default": 0,
+  "slash_control": 0,
+  "costs": [
+   0.00017020000000000002,
+   0.00024120000000000004
+  ],
+  "pass_": true
+ },
+ "e_max_output_tokens": {
+  "ok": false,
+  "output_tokens": 600,
+  "stop_reason": "stop_sequence",
+  "chars": 155,
+  "cost": 0.00106,
+  "rc": 1,
+  "pass_": false
+ },
+ "c_websearch": {
+  "ok": true,
+  "web_search_requests": 0,
+  "reply_head": "[{\"title\":\"unigrid unveils sodium ion residential energy storage systems\",\"url\":\"https://www.pv-magazine.com/2026/07/08/unigrid-unveils-sodium-ion-residential-energy-storage-systems/\",\"snippet\":\"Unigrid, a California-based developer, launched Na+Casa, its first residential energy storage system, and",
+  "cost": 0.01315829,
+  "rc": 0,
+  "denials": 0,
+  "init_tools": [
+   "WebSearch"
+  ],
+  "pass_": false
+ },
+ "i_concurrent_async": {
+  "replies": [
+   "0",
+   "1",
+   "2"
+  ],
+  "seconds": 3.4,
+  "cost": 0.0005523,
+  "util": {
+   "five_hour": 0.29,
+   "seven_day": 0.12
+  },
+  "pass_": true
+ },
+ "_ledger_usd": 0.016019
+}

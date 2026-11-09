@@ -85,6 +85,7 @@ from deep_research.agents.substack.tools import (
     search_substack, read_substack_articles, check_author_profile,
     _fetch_substack_article,
 )
+from deep_research.agents.web.claude_search import claude_web_search
 from deep_research.agents.web.tools import (
     tavily_search, exa_deep_search,
 )
@@ -100,14 +101,14 @@ SEARCH_TOOL_NAMES = {
     "search_pubmed", "search_arxiv", "search_term_in_subreddit",
     "get_subreddit_posts", "search_subreddits", "search_sec_filings",
     "search_substack",
-    "tavily_search", "exa_deep_search",
+    "tavily_search", "exa_deep_search", "claude_web_search",
 }
 
 # Search tools whose results get an [S#] handle for index-based reads.
 SEARCH_INDEXABLE_TOOLS = {
     "search_pubmed", "search_arxiv", "search_term_in_subreddit",
     "get_subreddit_posts", "search_sec_filings", "search_substack",
-    "tavily_search", "exa_deep_search",
+    "tavily_search", "exa_deep_search", "claude_web_search",
 }
 
 _reddit_tools = _base_tools + [
@@ -207,12 +208,25 @@ _general_tools = _build_general_tools(_general_keys)
 def _runtime_search_tools():
     """Web search tools enabled for the active runtime's config + credentials."""
     rt = get_runtime()
-    engine = (rt.config.web_search_engine or "").lower()
+    return _search_tools_for(rt.config, rt.credentials)
+
+
+def _runtime_search_tools_for(config, credentials=None):
+    """Same resolution from an explicit config (no active runtime)."""
+    from deep_research.models import Credentials
+    return _search_tools_for(config, credentials or Credentials({"TAVILY_API_KEY": "x", "EXA_API_KEY": "x"}))
+
+
+def _search_tools_for(config, credentials):
+    engine = (config.web_search_engine or "").lower()
+    rt = type("_RT", (), {"credentials": credentials})()
     tools = []
     if engine in ("tavily", "both") and rt.credentials.has("TAVILY_API_KEY"):
         tools.append(tavily_search)
     if engine in ("exa", "both") and rt.credentials.has("EXA_API_KEY"):
         tools.append(exa_deep_search)
+    if engine == "claude":
+        tools.append(claude_web_search)     # Claude's own WebSearch on the owner's plan: no search API key
     return tools
 
 
@@ -223,7 +237,7 @@ def _dedupe_tools(tools) -> list:
 def _runtime_platform_tools(rt, agent_type: str) -> list:
     """Resolve the platform's tool list for the active runtime."""
     _web_static = [t for t in _PLATFORM_TOOL_SETS.get("web", [])
-                   if t.name not in {"tavily_search", "exa_deep_search"}]
+                   if t.name not in {"tavily_search", "exa_deep_search", "claude_web_search"}]
     if agent_type == "web":
         return _dedupe_tools(list(_web_static) + _runtime_search_tools())
     if agent_type == "general":
@@ -236,7 +250,7 @@ def _runtime_platform_tools(rt, agent_type: str) -> list:
                 chosen.extend(_web_static)
             else:
                 chosen.extend(_PLATFORM_TOOL_SETS[key])
-        chosen = [t for t in chosen if t.name not in {"tavily_search", "exa_deep_search"}]
+        chosen = [t for t in chosen if t.name not in {"tavily_search", "exa_deep_search", "claude_web_search"}]
         chosen.extend(_runtime_search_tools())
         return _dedupe_tools(chosen)
     return list(PLATFORMS.get(agent_type, PLATFORMS["reddit"]).get("tools", []))
