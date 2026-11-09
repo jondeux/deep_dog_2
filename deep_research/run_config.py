@@ -96,6 +96,9 @@ class RunConfig:
     claude_code_usd_cap: Optional[float] = 5.0
     claude_code_max_concurrent: int = 3
     claude_code_timeout_seconds: int = 600
+    # Kept back for the final report: research stops at usd_cap*(1-reserve) and at plan_window_max-window_reserve.
+    claude_code_report_reserve: float = 0.25
+    claude_code_window_reserve: float = 0.10
     # Search backend for web_search_engine="claude": Claude's own WebSearch tool, run by this model.
     claude_search_model: str = "claudecode:haiku-5.5@low"
 

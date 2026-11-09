@@ -7,9 +7,11 @@ from typing import Optional
 from .chat_model import ClaudeCodeCallError, ClaudeCodeChatModel
 from .governor import Governor, GovernorStop
 from .models import EFFORTS, MODEL_IDS, PREFIX, catalog, is_claudecode, parse_name, validate_effort
+from .phase import current_phase, report_scope
 from .preflight import ClaudeCodeUnavailable, ensure_ready
 from .runtime import active_governor, governor_scope
 from .transcript import ProtocolError
+from .usage import format_usage
 
 
 def build_chat_model(model_name: str, *, temperature: float = 0, max_tokens: Optional[int] = None,
@@ -24,4 +26,5 @@ def build_chat_model(model_name: str, *, temperature: float = 0, max_tokens: Opt
 
 __all__ = ["ClaudeCodeCallError", "ClaudeCodeChatModel", "ClaudeCodeUnavailable", "EFFORTS", "Governor",
            "GovernorStop", "MODEL_IDS", "PREFIX", "ProtocolError", "active_governor", "build_chat_model",
-           "catalog", "ensure_ready", "governor_scope", "is_claudecode", "parse_name", "validate_effort"]
+           "catalog", "current_phase", "ensure_ready", "format_usage", "governor_scope", "is_claudecode",
+           "parse_name", "report_scope", "validate_effort"]

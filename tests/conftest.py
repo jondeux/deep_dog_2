@@ -157,6 +157,19 @@ def _no_real_claude(tmp_path_factory):
     assert not sentinel.exists(), "a free test launched a real `claude` (it reached the PATH stub)"
 
 
+# Resume state must never land in the real deep-research-memory/ folder from a test run.
+@pytest.fixture(autouse=True, scope="session")
+def _memory_dir_in_tmp(tmp_path_factory):
+    import os
+    old = os.environ.get("DEEPDOG_MEMORY_DIR")
+    os.environ["DEEPDOG_MEMORY_DIR"] = str(tmp_path_factory.mktemp("deep-research-memory"))
+    yield
+    if old is None:
+        os.environ.pop("DEEPDOG_MEMORY_DIR", None)
+    else:
+        os.environ["DEEPDOG_MEMORY_DIR"] = old
+
+
 @pytest.fixture
 def fake_claude(tmp_path, monkeypatch):
     """Point the provider at tests/fake_claude.py. Returns a helper: ``fc.script([...])``, ``fc.calls()``."""

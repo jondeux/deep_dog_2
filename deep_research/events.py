@@ -43,6 +43,9 @@ RUN_COMPLETED = "run_completed"
 RUN_FAILED = "run_failed"
 RUN_CANCELLED = "run_cancelled"
 RUN_TIMED_OUT = "run_timed_out"
+# Runs on the Claude plan (claudecode: models): usage snapshots and an early stop by a usage cap.
+USAGE_UPDATED = "usage_updated"
+RUN_STOPPED_EARLY = "run_stopped_early"
 
 # Optional trace-lite events (not chain-of-thought): coarse phase markers.
 PHASE_STARTED = "phase_started"
@@ -55,7 +58,7 @@ EVENT_TYPES = frozenset({
     SOURCE_SAVED, REPORT_STARTED, CITATIONS_VALIDATED,
     SUBTopic_GENERATION_STARTED, SUBTopic_GENERATION_COMPLETED,
     RUN_COMPLETED, RUN_FAILED, RUN_CANCELLED, RUN_TIMED_OUT,
-    PHASE_STARTED, PHASE_COMPLETED,
+    PHASE_STARTED, PHASE_COMPLETED, USAGE_UPDATED, RUN_STOPPED_EARLY,
 })
 
 # Event types that must NEVER carry content that could include hidden

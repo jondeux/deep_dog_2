@@ -30,6 +30,7 @@ import asyncio
 import argparse
 import json
 import logging
+import os
 import random
 import string
 import sys
@@ -50,8 +51,10 @@ from deep_research.config import ENABLE_RESEARCH_TRACE, OUTPUT_MODE, get_supervi
 from deep_research.integration import (  # noqa: E402
     RuntimeOptions,
     RunStatus,
+    resume_research as engine_resume_research,
     run_research as engine_run_research,
 )
+from deep_research.resume import DEFAULT_DIR as _MEMORY_DIR_NAME, FileSnapshotSink  # noqa: E402
 from deep_research.run_config import RunConfig  # noqa: E402
 from deep_research.runtime import PromptLibrary  # noqa: E402
 from deep_research.utils import extract_text_from_response  # noqa: E402
@@ -62,6 +65,11 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+
+# Resume state of runs that a usage cap stopped early (git-ignored). See deep_research/resume.py.
+# DEEPDOG_MEMORY_DIR overrides the folder (the tests point it at a temp dir so they never write here).
+DEFAULT_MEMORY_DIR = Path(os.environ.get("DEEPDOG_MEMORY_DIR") or Path(__file__).resolve().parent / _MEMORY_DIR_NAME)
 
 
 def _save_output_to_db(output_data: dict) -> None:
@@ -81,7 +89,8 @@ def _save_output_to_db(output_data: dict) -> None:
 
 
 async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
-                       clean_output: bool = False, config: RunConfig = None) -> Dict[str, Any]:
+                       clean_output: bool = False, config: RunConfig = None,
+                       resume: dict = None, memory_dir: Path = None) -> Dict[str, Any]:
     """
     Run the Deep Research agent and save the output to a file.
 
@@ -91,6 +100,10 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
         thread_id: Optional thread ID for the research session
         clean_output: If True, write only the final report (no header/brief)
         config: Optional RunConfig (e.g. from the model picker); default is RunConfig().finalize()
+        resume: A resume state loaded from ``memory_dir`` (``deep_research.resume.load_snapshot``): continue
+            that run instead of starting one. ``prompt`` is then taken from it, and ``config=None`` reuses
+            the saved configuration.
+        memory_dir: Where a run stopped early by a usage cap saves its resume state (default: deep-research-memory/)
 
     Returns:
         Dictionary with:
@@ -101,32 +114,68 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir = Path(memory_dir) if memory_dir else DEFAULT_MEMORY_DIR
+    if resume is not None:
+        prompt = resume["prompt"]
 
     # Generate timestamp for filename and thread (random letters avoid
     # collisions when multiple agents start in the same second).
     random_suffix = ''.join(random.choices(string.ascii_lowercase, k=3))
     timestamp = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{random_suffix}"
     if thread_id is None:
-        thread_id = timestamp
+        thread_id = (f"{resume['root_id']}-r{int(resume.get('resumes') or 0) + 1}"
+                     if resume is not None else timestamp)
     output_file = output_dir / f"research_{timestamp}.md"
 
     logger.info(f"Starting research with thread ID: {thread_id}")
     logger.info(f"Output will be saved to: {output_file}")
 
-    cfg = (config or RunConfig()).finalize()
-    result = await engine_run_research(
-        prompt,
-        config=cfg,
-        runtime=RuntimeOptions(
-            run_id=thread_id,
-            thread_id=thread_id,
-            output_dir=output_dir,
-            console_enabled=True,
-        ),
+    cfg = (config or RunConfig()).finalize() if resume is None or config is not None else None
+    memory = FileSnapshotSink(memory_dir)        # keeps the resume state if a usage cap stops the run early
+    options = RuntimeOptions(
+        run_id=thread_id,
+        thread_id=thread_id,
+        output_dir=output_dir,
+        console_enabled=True,
+        artifact_sink=memory,
     )
+    if resume is not None:
+        logger.info(f"Resuming run {resume['thread_id']} (stopped by {resume.get('stopped_early')}, "
+                    f"{resume.get('elapsed_minutes')} research minutes in)")
+        result = await engine_resume_research(resume, config=cfg, runtime=options)
+    else:
+        result = await engine_run_research(prompt, config=cfg, runtime=options)
 
-    if result.status in (RunStatus.FAILED.value, RunStatus.CANCELLED.value) and not result.final_report:
-        error = result.failure or result.status
+    # Runs on the Claude plan: show and save what it cost (list-price estimate), and whether a cap stopped it.
+    usage = (result.usage or {}).get("claude_code")
+    stopped_early = (result.run_metadata or {}).get("stopped_early")
+    usage_file = None
+    if usage:
+        from deep_research.providers.claude_code import format_usage
+        print("\n" + format_usage(usage))
+        if stopped_early:
+            mode = {"synthesized": "the report was still written from the findings gathered so far",
+                    "digest": "no budget was left to write a report, so the findings are returned unsynthesised"
+                    }.get(stopped_early.get("report_mode"), "")
+            print(f"  STOPPED EARLY by {stopped_early['reason']}" + (f": {mode}" if mode else ""))
+        if memory.path is not None:
+            root = result.run_metadata["resume_state"]["root_id"]
+            print(f"  RESUME STATE saved: {memory.path}\n  After the plan window resets, continue with: "
+                  f"python run_research.py --resume {root}")
+        usage_file = output_dir / f"usage_{timestamp}.json"
+        usage_file.write_text(json.dumps({
+            "thread_id": thread_id, "status": result.status, "stopped_early": stopped_early, "usage": usage,
+            "elapsed_seconds": (result.run_metadata or {}).get("elapsed_seconds"),
+            "report_file": str(output_file),
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info(f"Usage saved to: {usage_file}")
+
+    stopped_without_report = bool(stopped_early) and not result.final_report
+    if (result.status in (RunStatus.FAILED.value, RunStatus.CANCELLED.value) and not result.final_report) \
+            or stopped_without_report:
+        error = result.failure or (
+            f"stopped by {stopped_early['reason']} before a report could be written (draft only)"
+            if stopped_without_report else result.status)
         error_file = output_dir / f"error_{timestamp}.txt"
         error_file.write_text(
             f"Error occurred at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -252,6 +301,11 @@ SUPERVISOR REACTION:
         "final_report": final_report,
         "sources": sources,
         "trace_content": trace_content,
+        "status": result.status,
+        "usage": usage,
+        "usage_file": str(usage_file) if usage_file else None,
+        "stopped_early": stopped_early,
+        "resume_file": str(memory.path) if memory.path else None,
     }
 
 
@@ -284,6 +338,14 @@ Examples:
     )
 
     parser.add_argument(
+        "--resume", metavar="ID",
+        help="continue a run that a usage cap stopped early: its id (the thread id printed when it stopped)",
+    )
+    parser.add_argument(
+        "--memory-dir", default=None,
+        help=f"folder for resume state (default: {_MEMORY_DIR_NAME}/ next to this script)",
+    )
+    parser.add_argument(
         "--output-dir", "-o",
         type=str,
         default="outputs",
@@ -307,6 +369,12 @@ Examples:
         picker.add_argument(f"--{role}-effort", help=f"reasoning effort for the {role} role")
     picker.add_argument("--search", default="claude", help="web search backend: claude (default, no key), exa, tavily, both")
     picker.add_argument("--list-presets", action="store_true", help="show the presets and exit")
+    picker.add_argument("--usd-cap", type=float, default=None,
+                        help="list-price cap in USD for the whole run (default 5.0). Research stops at 75%% of it, "
+                             "the rest is kept for writing the final report")
+    picker.add_argument("--plan-window-max", type=float, default=None,
+                        help="never exceed this share of the plan window, 0 to 1 (default 0.8). Research stops "
+                             "0.1 below it, the rest is kept for the final report")
 
     args = parser.parse_args()
 
@@ -316,8 +384,21 @@ Examples:
             print(model_picker.describe(name) + ("   (default)" if name == model_picker.DEFAULT_PRESET else ""))
         return
 
-    if not args.prompt and not args.prompt_file:
-        parser.error("one of the arguments --prompt/-p --prompt-file/-f is required")
+    if args.resume and (args.prompt or args.prompt_file):
+        parser.error("--resume continues a saved run; it takes no --prompt or --prompt-file")
+    if not args.prompt and not args.prompt_file and not args.resume:
+        parser.error("one of the arguments --prompt/-p --prompt-file/-f --resume is required")
+
+    snapshot = None
+    if args.resume:
+        from deep_research.resume import load_snapshot
+        try:
+            snapshot = load_snapshot(args.memory_dir or DEFAULT_MEMORY_DIR, args.resume)
+        except ValueError as e:
+            parser.error(str(e))
+        if args.preset or any(getattr(args, f"{r}_{k}") for r in ("supervisor", "draft", "subagent")
+                              for k in ("model", "effort")) or args.search != "claude":
+            parser.error("--resume keeps the saved models and search; only --usd-cap and --plan-window-max may change")
 
     picked = None
     wants_picker = args.preset or any(getattr(args, f"{r}_{k}") for r in ("supervisor", "draft", "subagent")
@@ -336,8 +417,30 @@ Examples:
         except ValueError as e:
             parser.error(str(e))
         print("Models: " + model_picker.describe(args.preset or model_picker.DEFAULT_PRESET, **overrides))
+        caps = {k: v for k, v in (("claude_code_usd_cap", args.usd_cap),
+                                  ("claude_code_plan_window_max", args.plan_window_max)) if v is not None}
+        if caps:
+            if (args.usd_cap is not None and args.usd_cap <= 0) or (
+                    args.plan_window_max is not None and not 0.1 <= args.plan_window_max <= 1):
+                parser.error("--usd-cap must be above 0 and --plan-window-max between 0.1 and 1")
+            from dataclasses import replace
+            picked = replace(picked, **caps)
+    elif args.resume and (args.usd_cap is not None or args.plan_window_max is not None):
+        # A resumed segment gets a fresh cap; the window guard still reads the real plan window.
+        if (args.usd_cap is not None and args.usd_cap <= 0) or (
+                args.plan_window_max is not None and not 0.1 <= args.plan_window_max <= 1):
+            parser.error("--usd-cap must be above 0 and --plan-window-max between 0.1 and 1")
+        from dataclasses import replace
+        from deep_research.resume import config_from_snapshot
+        picked = replace(config_from_snapshot(snapshot), **{k: v for k, v in (
+            ("claude_code_usd_cap", args.usd_cap), ("claude_code_plan_window_max", args.plan_window_max))
+            if v is not None})
+    elif args.usd_cap is not None or args.plan_window_max is not None:
+        parser.error("--usd-cap and --plan-window-max apply to Claude-plan runs: add --preset or a model flag")
 
-    if args.prompt:
+    if snapshot is not None:
+        prompt = None
+    elif args.prompt:
         prompt = args.prompt
     else:
         prompt_path = Path(args.prompt_file)
@@ -347,17 +450,26 @@ Examples:
         with open(prompt_path, "r", encoding="utf-8") as f:
             prompt = f.read().strip()
 
-    if not prompt:
+    if snapshot is None and not prompt:
         logger.error("Empty prompt provided")
         sys.exit(1)
 
-    logger.info(f"Prompt length: {len(prompt)} characters")
+    logger.info(f"Prompt length: {len(prompt or snapshot['prompt'])} characters")
 
     output_dir = Path(args.output_dir)
 
     try:
-        result = asyncio.run(run_research(prompt, output_dir, args.thread_id, config=picked))
-        print(f"\n✅ Research complete! Output saved to: {result['output_file']}")
+        extra = {}
+        if snapshot is not None:
+            extra["resume"] = snapshot
+        if args.memory_dir:
+            extra["memory_dir"] = args.memory_dir
+        result = asyncio.run(run_research(prompt, output_dir, args.thread_id, config=picked, **extra))
+        status = result.get("status")
+        if result.get("stopped_early"):
+            print(f"\n⚠️  Stopped early by a usage limit ({status}). Output saved to: {result['output_file']}")
+        else:
+            print(f"\n✅ Research complete! Output saved to: {result['output_file']}")
     except KeyboardInterrupt:
         logger.info("Research interrupted by user")
         sys.exit(1)

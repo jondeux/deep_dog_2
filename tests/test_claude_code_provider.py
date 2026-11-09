@@ -154,7 +154,7 @@ def test_plan_window_guard_stops_before_spawning(fake_claude):
 
 def test_usd_cap_stops(fake_claude):
     fake_claude.script([{"text": "a", "cost": 0.004}])
-    gov = Governor(usd_cap=0.005)
+    gov = Governor(usd_cap=0.005, report_reserve=0.0)       # no reserve: the research limit is the cap itself
     m = mk(gov=gov)
     m.invoke([HumanMessage("1")]); m.invoke([HumanMessage("2")])
     with pytest.raises(GovernorStop):

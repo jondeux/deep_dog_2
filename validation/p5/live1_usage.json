@@ -1,0 +1,48 @@
+{
+  "thread_id": "live1",
+  "status": "completed",
+  "stopped_early": {
+    "reason": "plan_window_guard",
+    "phase": "research",
+    "report_mode": "synthesized"
+  },
+  "usage": {
+    "calls": 133,
+    "est_cost_usd": 2.538191,
+    "util": {
+      "five_hour": 0.7,
+      "seven_day": 0.18
+    },
+    "stopped": "plan_window_guard",
+    "stop_phase": "research",
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "calls": 10,
+        "cost": 1.693642,
+        "input_tokens": 353614,
+        "output_tokens": 53593
+      },
+      "claude-haiku-5-5": {
+        "calls": 81,
+        "cost": 0.199252,
+        "input_tokens": 711021,
+        "output_tokens": 174301
+      },
+      "claude-haiku-5-5+WebSearch": {
+        "calls": 42,
+        "cost": 0.645293,
+        "input_tokens": 254408,
+        "output_tokens": 54506
+      }
+    },
+    "limits": {
+      "usd_cap": 3.0,
+      "usd_research_limit": 2.25,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    }
+  },
+  "elapsed_seconds": 965.7,
+  "report_file": "outputs/research_2026-11-09_23-11-04_rzv.md"
+}

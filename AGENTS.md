@@ -11,7 +11,9 @@ Python 3.11+ multi-agent research engine (LangGraph) that turns a question into 
 - Test one case: `python3 -m pytest tests/test_webui.py -k name`
 - Measure project state: `bash scripts/state_snapshot.sh` (runs the full suite, read-only; paste the result into `claude/project-state.md`)
 - Run a research job: `python run_research.py --prompt "..."` (needs `.env`, see `.env.example`)
-- Run on the Claude plan (no provider keys): `python run_research.py --prompt "..." --preset economy` (also `benchmark`, `custom`, `testing-framework`; `--list-presets`; `--supervisor-model/--supervisor-effort`, same for `--draft-` and `--subagent-`; `--search claude|exa|tavily|both`)
+- Run on the Claude plan (no provider keys): `python run_research.py --prompt "..." --preset economy` (also `benchmark`, `custom`, `testing-framework`; `--list-presets`; `--search claude|exa|tavily|both`)
+- Claude-plan run controls: `--supervisor-model/--supervisor-effort` (same for `--draft-`, `--subagent-`), `--usd-cap`, `--plan-window-max`. The run prints its usage and writes `usage_<ts>.json`.
+- Continue a run a usage cap stopped: `python run_research.py --resume <id>` (state in `deep-research-memory/`, see `claude/memory/deep-research-memory.md`).
 - Run the web UI: `python webui/app.py` (127.0.0.1:7860; honours `GRADIO_SERVER_NAME` / `GRADIO_SERVER_PORT`)
 - Build the Space bundle: `bash webui/build_space.sh <empty-dir> gradio`
 
@@ -37,7 +39,7 @@ No linter or type checker is configured; do not add one unasked.
 
 - Known failures (pre-existing, same cause): `tests/test_simple_research.py::test_simple_example[completed-0]` and `[partial-1]` patch `simple_research.QUESTION`, which the script no longer defines.
 - Tests use the repo's `FakeModelFactory`; never call a real provider. The `smoke` marker is skipped by default.
-- `claudecode:` tests use `tests/fake_claude.py` (the `fake_claude` fixture). `tests/conftest.py` puts a stub `claude` on PATH and fails the session if a test reaches it. Live probes and pilots live in `validation/p2`, `validation/p4`.
+- `claudecode:` tests use `tests/fake_claude.py` (the `fake_claude` fixture). `tests/conftest.py` puts a stub `claude` on PATH and fails the session if a test reaches it. Live probes and pilots live in `validation/p2`, `p4`, `p5`.
 - Unit tests that call `run_ui` directly hid real bugs before. Drive the real server (`tests/webui_launcher.py`) and Chromium before trusting a UI change.
 - Do not edit source files in place to test mutants while another agent runs pytest; use in-memory mutants.
 
@@ -58,6 +60,7 @@ No linter or type checker is configured; do not add one unasked.
 - LangSmith endpoints come only from the fixed US/EU map, never free text.
 - `claudecode:` models (hard rule) run the unmodified `claude` CLI on the OWNER's own plan: personal use only. The web UI must keep refusing them. Never use `--bare`, never read, store or forward the sign-in, never pass provider keys to children (`DEEPDOG_ENV_PASS` is the owner's own opt-in).
 - No live `claude -p` call or pilot without the owner's spend approval; probes use haiku-5.5 and a hard cap (`claude_code_usd_cap`, plan-window guard `claude_code_plan_window_max`).
+- Those two are ceilings. Research stops earlier (`claude_code_report_reserve`, `claude_code_window_reserve`) so the final report can still be written.
 - Ask before: dependency upgrades, changing the Space SDK or Python version (`sdk_version: 6.30.0`, `python_version: "3.11"`), public `run_research()` API changes.
 
 ## Git and PRs

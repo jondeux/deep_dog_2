@@ -48,6 +48,12 @@ class SupervisorState(TypedDict):
     consecutive_failures: int = 0
     # Final report written by the write_final_report node (maps up to AgentState)
     final_report: str = ""
+    # A usage cap ended research early (reason code); the report was still written from the findings
+    stopped_early: str = ""
+    # How the final report was produced after such a stop: "synthesized" (model) or "digest" (no model call)
+    report_mode: str = ""
+    # Research minutes on the clock when the stop happened (a resume continues from here)
+    stop_elapsed_minutes: float = 0.0
 
 # ── Platform-specific sub-agent tool schemas ──────────────────────────
 # One schema per platform. All take research_topic plus a `discovery` flag

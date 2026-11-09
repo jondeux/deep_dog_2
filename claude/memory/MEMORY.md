@@ -10,6 +10,7 @@ Pending candidates: 0 (see [candidates](candidates.md); the user approves with "
 - [Decisions](decisions.md): what was decided, why, and how to undo it.
 - [Candidates](candidates.md): proposed rules waiting for the user's approval.
 - [Failures](failures.md): metadata tickets from failed turns; /learn drafts candidates for open ones.
+- [Deep research memory](deep-research-memory.md): how a run stopped by a usage cap is saved and resumed (`--resume`); live measurements go here.
 
 ## Elsewhere
 - [.trail/learnings](../../.trail/learnings/): trail learnings: one file per saved learning

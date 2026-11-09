@@ -11,6 +11,7 @@ maintaining isolated context windows for each research topic.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -196,6 +197,60 @@ def _classify_error(e: BaseException) -> Literal["fatal", "retryable", "bug"]:
     return "bug"
 
 
+_STOP_TEXT = {
+    "usd_cap": "the cost cap was reached",
+    "plan_window_guard": "the plan-window guard was reached",
+    "plan_limit_reached": "the plan's own usage limit was reached",
+}
+
+
+def _governor_stop_reason(e: BaseException) -> str | None:
+    """The reason code when ``e`` (or its cause chain) is a usage-cap stop from the claudecode: governor.
+
+    Duck-typed on ``governor_stop`` so the engine never imports the provider. Such a stop is not a failure:
+    research ends early and the report is still written from the findings gathered so far."""
+    seen = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if getattr(e, "governor_stop", False):
+            return getattr(e, "reason", None) or "usage_cap"
+        e = e.__cause__ or e.__context__
+    return None
+
+
+def _report_scope():
+    """Final-report calls may use the reserve research left unspent (no-op without a usage governor)."""
+    scope = getattr(get_runtime().models, "report_scope", None)
+    return scope() if callable(scope) else contextlib.nullcontext()
+
+
+def _emit_usage() -> None:
+    """A usage snapshot event (claudecode: runs only; models without a governor have none)."""
+    usage = getattr(get_runtime().models, "usage", None)
+    snap = usage() if callable(usage) else None
+    if snap:
+        _emit(_events.USAGE_UPDATED, phase="run", agent="governor",
+              **{k: snap.get(k) for k in ("calls", "est_cost_usd", "util", "util_first", "stopped", "stop_phase", "limits")})
+
+
+def _digest_report(state: dict, final_registry: list, reason: str) -> str:
+    """A report built WITHOUT a model call: the sub-agents' findings as gathered, citations resolved in code.
+
+    Used only when a usage stop leaves no budget to write the report. Nothing is added or paraphrased."""
+    notes = [extract_text_from_response(n).strip()
+             for n in get_notes_from_tool_calls(list(state.get("supervisor_messages", []) or []))]
+    body = "\n\n".join(n for n in notes if n)
+    if not body:
+        body = "Sources found (no sub-agent notes survived the stop):\n\n" + "\n".join(
+            f"- [{e.get('code')}] {e.get('title') or 'Untitled'}" + (f": {e['ref']}" if e.get("ref") else "")
+            for e in final_registry)
+    why = _STOP_TEXT.get(reason, f"a usage limit was reached ({reason})")
+    text = (f"# Research findings (not synthesised)\n\n*Research stopped early because {why}. This report was "
+            f"not written by the model: it is the sub-agents' findings as gathered, with citations resolved in "
+            f"code. Nothing was added.*\n\n{body}")
+    return finalize_citations(text, final_registry, renumber=True)
+
+
 def _has_research_findings(state: dict, all_curated_sources: list, new_registry_entries: list) -> bool:
     """Whether at least one iteration gathered findings of task value.
 
@@ -327,7 +382,7 @@ def _build_supervisor_system_message(state: SupervisorState) -> str:
         format_kwargs["available_subagents"] = _build_subagent_tools_block(cfg.enabled_agents)
     return lead_prompt.format(**format_kwargs)
 
-async def supervisor(state: SupervisorState) -> Command[Literal["supervisor_tools"]]:
+async def supervisor(state: SupervisorState) -> Command[Literal["supervisor_tools", "write_final_report"]]:
     """Coordinate research activities.
 
     Analyzes the research brief and current progress to decide:
@@ -374,6 +429,14 @@ async def supervisor(state: SupervisorState) -> Command[Literal["supervisor_tool
         except Exception as e:
             kind = _classify_error(e)
             if kind == "fatal":
+                stop = _governor_stop_reason(e)
+                if stop and _has_research_findings(state, [], []):
+                    # A usage cap, not a failure: stop researching and write from what was gathered.
+                    logger.warning("Usage stop (%s) — writing the final report from the findings so far", stop)
+                    print(f"\n{Colors.YELLOW}[Usage limit] {_STOP_TEXT.get(stop, stop)}; writing the final report "
+                          f"from the findings gathered so far.{Colors.RESET}", flush=True)
+                    return Command(goto="write_final_report",
+                                   update={"stopped_early": stop, "stop_elapsed_minutes": round(elapsed_minutes, 3)})
                 raise
             logger.warning(
                 "Supervisor decision failed (attempt %d, %s): %s",
@@ -431,6 +494,7 @@ async def supervisor(state: SupervisorState) -> Command[Literal["supervisor_tool
         elapsed_minutes=round(elapsed_minutes, 2),
         remaining_minutes=round(runtime.remaining_minutes(), 2),
     )
+    _emit_usage()
 
     # Log this conductor turn for observability
     log_conductor_turn(
@@ -495,6 +559,7 @@ async def supervisor_tools(state: SupervisorState) -> Command[Literal["superviso
     should_end = False
     aborted = False  # Circuit breaker flag
     abort_reason = ""  # Human-readable reason for an abort
+    stop_reason = ""  # A usage cap ended research early (the report is still written)
     turn_failed = False  # Set when this iteration ended in a supervisor-level failure
     consecutive_failures = state.get("consecutive_failures", 0)
 
@@ -753,7 +818,14 @@ async def supervisor_tools(state: SupervisorState) -> Command[Literal["superviso
                 # Check if failures are quota/rate-limit errors (not just timeouts)
                 sample_error = str(all_results[0])
                 is_quota_error = "RESOURCE_EXHAUSTED" in sample_error or "429" in sample_error
-                if is_quota_error:
+                usage_stop = next((r for r in map(_governor_stop_reason, all_results) if r), None)
+                if usage_stop and _has_research_findings(state, all_curated_sources, new_registry_entries):
+                    print(f"\n{Colors.YELLOW}[Usage limit] {_STOP_TEXT.get(usage_stop, usage_stop)}; writing the "
+                          f"final report from the findings gathered so far.{Colors.RESET}", flush=True)
+                    stop_reason = usage_stop
+                    should_end = True
+                    next_step = "write_final_report"
+                elif is_quota_error:
                     print(f"\n{Colors.RED}[CIRCUIT BREAKER] All {total_agents} subagents failed with API quota errors. "
                           f"Aborting research — check your API billing/quota.{Colors.RESET}")
                     logger.error(f"Circuit breaker triggered: all {total_agents} subagents hit quota limits. Aborting.")
@@ -780,7 +852,15 @@ async def supervisor_tools(state: SupervisorState) -> Command[Literal["superviso
             if isinstance(e, RunCancelledError):
                 raise
             kind = _classify_error(e)
-            if kind == "fatal":
+            usage_stop = _governor_stop_reason(e) if kind == "fatal" else None
+            if usage_stop and _has_research_findings(state, all_curated_sources, new_registry_entries):
+                logger.warning("Usage stop (%s) — writing the final report from the findings so far", usage_stop)
+                print(f"\n{Colors.YELLOW}[Usage limit] {_STOP_TEXT.get(usage_stop, usage_stop)}; writing the final "
+                      f"report from the findings gathered so far.{Colors.RESET}", flush=True)
+                stop_reason = usage_stop
+                should_end = True
+                next_step = "write_final_report"
+            elif kind == "fatal":
                 logger.error("Fatal error during research — aborting: %s", scrub_secrets(e))
                 aborted = True
                 abort_reason = f"Fatal error during research: {scrub_secrets(e)}"
@@ -849,6 +929,9 @@ async def supervisor_tools(state: SupervisorState) -> Command[Literal["superviso
             update["abort_reason"] = abort_reason
         else:
             update["consecutive_failures"] = 0
+        if stop_reason:
+            update["stopped_early"] = stop_reason
+            update["stop_elapsed_minutes"] = round(elapsed_minutes, 3)
         return Command(
             goto=next_step,
             update=update
@@ -962,7 +1045,8 @@ async def write_final_report(state: SupervisorState) -> dict:
             content_chars=content_chars, reasoning_chars=reasoning_chars, tool_call_chars=tool_chars,
         )
         started = time.monotonic()
-        response = await _final_report_writer_model().ainvoke(request_messages)
+        with _report_scope():       # may use the reserve research left unspent (claudecode: governor)
+            response = await _final_report_writer_model().ainvoke(request_messages)
         raw = extract_text_from_response(response.content)
         reasoning_chars = len(response.additional_kwargs.get("reasoning_content") or "")
         finish_reason = (response.response_metadata or {}).get("finish_reason")
@@ -988,10 +1072,24 @@ async def write_final_report(state: SupervisorState) -> dict:
             return "content-filter refusal"
         return None
 
+    stopped = state.get("stopped_early") or ""     # set when a usage cap ended research early
+    digest = False
     request_messages = messages
     for attempt in (1, 2):
         runtime.check_cancelled()
-        raw_report = await invoke_writer(request_messages, attempt)
+        try:
+            raw_report = await invoke_writer(request_messages, attempt)
+        except Exception as e:  # noqa: BLE001
+            usage_stop = _governor_stop_reason(e)
+            if usage_stop is None or not _has_research_findings(state, [], []):
+                raise
+            # The cap leaves no room for the model to write: return the findings themselves, clearly labelled.
+            stopped = stopped or usage_stop
+            digest = True
+            final_report = _digest_report(state, final_registry, stopped)
+            diagnostic("final_writer_digest", f"No model call possible ({stopped}); returning the findings digest",
+                       reason=stopped, chars=len(final_report))
+            break
         reason = invalid_reason(raw_report)
         if reason is None:
             final_report = finalize_citations(raw_report, final_registry, renumber=True)
@@ -1018,10 +1116,17 @@ async def write_final_report(state: SupervisorState) -> dict:
         ))]
 
     _emit(_events.CITATIONS_VALIDATED, phase="report", agent="final_report_writer",
-          report_kind="final", chars=len(final_report), sources=len(final_registry))
+          report_kind="digest" if digest else "final", chars=len(final_report), sources=len(final_registry))
 
     print(f"[Final Report] Written: {len(final_report)} chars (citations finalized in code)")
-    return {"final_report": final_report}
+    out = {"final_report": final_report}
+    if stopped:
+        out["stopped_early"] = stopped
+        out["report_mode"] = "digest" if digest else "synthesized"
+        _emit(_events.RUN_STOPPED_EARLY, phase="run", agent="governor", reason=stopped,
+              report_mode=out["report_mode"], sources=len(final_registry), resumable=True,
+              detail=_STOP_TEXT.get(stopped, stopped))
+    return out
 
 
 # Build supervisor graph

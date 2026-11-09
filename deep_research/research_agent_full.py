@@ -318,5 +318,25 @@ def build_research_agent(checkpointer=None):
     return deep_researcher_builder.compile(checkpointer=checkpointer)
 
 
+def build_resume_agent(checkpointer=None):
+    """The same research graph, entered at the supervisor with the state of an earlier, stopped run.
+
+    Scoping (clarify, brief, draft) is not repeated; the input is a full ``AgentState`` restored from a resume
+    file (``deep_research.resume.restore_inputs``). The nodes are the very same ones as the full graph."""
+    b = StateGraph(AgentState)
+    b.add_node("supervisor_subgraph", supervisor_agent)
+    b.add_node("final_report_generation", final_report_generation)
+    b.add_node("subtopic_evaluation", subtopic_evaluation)
+    b.add_node("subtopic_generation", subtopic_generation)
+    b.add_edge(START, "supervisor_subgraph")
+    b.add_edge("supervisor_subgraph", "final_report_generation")
+    b.add_conditional_edges(
+        "final_report_generation", _route_after_final_report,
+        {"subtopic_evaluation": "subtopic_evaluation", END: END},
+    )
+    b.add_edge("subtopic_generation", END)
+    return b.compile(checkpointer=checkpointer)
+
+
 # Backwards-compatible module-level compiled graph (no checkpointer).
 agent = deep_researcher_builder.compile()

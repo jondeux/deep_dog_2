@@ -96,8 +96,23 @@ class ModelFactory:
             c = self.config
             self._governor = Governor(
                 plan_window_max=c.claude_code_plan_window_max, usd_cap=c.claude_code_usd_cap,
-                max_concurrent=c.claude_code_max_concurrent, timeout_s=c.claude_code_timeout_seconds)
+                max_concurrent=c.claude_code_max_concurrent, timeout_s=c.claude_code_timeout_seconds,
+                report_reserve=c.claude_code_report_reserve, window_reserve=c.claude_code_window_reserve)
         return self._governor
+
+    def usage(self) -> Optional[dict]:
+        """Cost, plan-window use and per-model breakdown for this run, or ``None`` when no ``claudecode:``
+        model was used (the governor is only created on first use)."""
+        if self._governor is None:
+            return None
+        return self._governor.stats()
+
+    def report_scope(self):
+        """Context for the final-report calls: they may use the reserve research left unspent."""
+        if self._governor is None:
+            return contextlib.nullcontext()
+        from deep_research.providers.claude_code import report_scope
+        return report_scope()
 
     # ── public role builders ───────────────────────────────────────────
     def supervisor(self, tools: Optional[list] = None, *, max_tokens: Optional[int] = 32000,

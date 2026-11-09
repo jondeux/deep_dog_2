@@ -60,6 +60,14 @@ class AgentState(MessagesState):
     abort_reason: str = ""
     # Consecutive supervisor-level failed iterations (retry-once each; >=2 stops)
     consecutive_failures: int = 0
+    # A usage cap ended research early (reason code); the report was still written from the findings
+    stopped_early: str = ""
+    # How the final report was produced after such a stop: "synthesized" (model) or "digest" (no model call)
+    report_mode: str = ""
+    # Research minutes on the clock when the stop happened (a resume continues from here)
+    stop_elapsed_minutes: float = 0.0
+    # Supervisor iterations done (carried in and out of the supervisor subgraph, so a resume keeps its budget)
+    research_iterations: int = 0
     # Serialized RunConfig snapshot (persisted through the checkpointer)
     config_snapshot: Optional[dict] = None
     # Secondary subtopic reports: list of dicts {"title": str, "content": str}

@@ -17,6 +17,7 @@ htmlcov/
 
 # Local runtime output and databases
 outputs/
+deep-research-memory/
 *.partial.md
 *.log
 *.sqlite

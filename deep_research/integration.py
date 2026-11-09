@@ -254,6 +254,12 @@ async def _periodic_flush(observer: Observer, interval: float = _FLUSH_INTERVAL_
             _log.exception("periodic trace/event flush failed")
 
 
+def _claude_code_usage(models: Any) -> Optional[dict]:
+    """Cost, plan-window use and per-model breakdown when the run used ``claudecode:`` models, else None."""
+    usage = getattr(models, "usage", None)
+    return usage() if callable(usage) else None
+
+
 def _materialize(result: dict, observer: Observer, trace_enabled: bool) -> dict:
     """Extract stable, JSON-safe result fields from the final graph state."""
     final_report = result.get("final_report") or ""
@@ -268,6 +274,8 @@ def _materialize(result: dict, observer: Observer, trace_enabled: bool) -> dict:
         "research_iterations": int(result.get("research_iterations") or 0),
         "aborted": bool(result.get("aborted")),
         "abort_reason": result.get("abort_reason") or None,
+        "stopped_early": result.get("stopped_early") or None,
+        "report_mode": result.get("report_mode") or None,
         "sources": observer.aggregate_sources(),
         "trace": observer.get_research_trace() if trace_enabled else [],
     }
@@ -291,6 +299,33 @@ async def run_research(
     Returns:
         ``ResearchResult`` with status completed/failed/cancelled/timed_out.
     """
+    return await _run_research(prompt, config, runtime, credentials)
+
+
+async def resume_research(
+    snapshot: dict,
+    config: Optional[RunConfig] = None,
+    runtime: Optional[RuntimeOptions] = None,
+    credentials: Optional[Credentials] = None,
+) -> ResearchResult:
+    """Continue a run that a usage cap stopped early, from its saved resume state (``deep_research.resume``).
+
+    The supervisor picks up with the saved history, sources, iteration count and research clock; scoping is not
+    repeated. ``config=None`` reuses the saved configuration. Give the new run its own ``thread_id``."""
+    from deep_research.resume import config_from_snapshot, restore_inputs
+    restore_inputs(snapshot)                       # validates the snapshot before anything is spent
+    cfg = config if config is not None else config_from_snapshot(snapshot)
+    return await _run_research(snapshot["prompt"], cfg, runtime, credentials, resume=snapshot)
+
+
+async def _run_research(
+    prompt: str,
+    config: Optional[RunConfig],
+    runtime: Optional[RuntimeOptions],
+    credentials: Optional[Credentials],
+    resume: Optional[dict] = None,
+) -> ResearchResult:
+    """Shared body of ``run_research`` and ``resume_research``."""
     started_monotonic = time.monotonic()
     options = runtime or RuntimeOptions()
     cfg = (config or RunConfig()).finalize()
@@ -333,22 +368,28 @@ async def run_research(
     result = ResearchResult(status=RunStatus.COMPLETED.value, run_id=run_id, thread_id=thread_id)
 
     # Compile the full graph with the run's checkpointer.
-    from deep_research.research_agent_full import build_research_agent
-    graph = build_research_agent(checkpointer=checkpointer)
-
+    from deep_research.research_agent_full import build_research_agent, build_resume_agent
     graph_config = {
         "configurable": {"thread_id": thread_id, "recursion_limit": 200},
     }
-    inputs = {
-        "messages": [HumanMessage(content=prompt)],
-        "start_time": time.time(),
-        "config_snapshot": cfg.to_dict(),
-    }
+    if resume is not None:
+        from deep_research.resume import restore_inputs
+        graph = build_resume_agent(checkpointer=checkpointer)
+        inputs = restore_inputs(resume)
+        inputs["config_snapshot"] = cfg.to_dict()
+    else:
+        graph = build_research_agent(checkpointer=checkpointer)
+        inputs = {
+            "messages": [HumanMessage(content=prompt)],
+            "start_time": time.time(),
+            "config_snapshot": cfg.to_dict(),
+        }
 
     async with langsmith_scope(cfg, creds, run_id, observer=observer) as ls_scope:
         with runtime_scope(context):
             observer.emit(_events.RUN_STARTED, phase="run", agent="runner",
-                          prompt=prompt[:2000], run_profile=cfg.profile)
+                          prompt=prompt[:2000], run_profile=cfg.profile,
+                          **({"resumed_from": resume.get("thread_id")} if resume is not None else {}))
             observer.emit_trace("run_started", phase="run", agent="runner",
                                 prompt=prompt, profile=cfg.profile)
             # Pre-flight credential report (names only, never values).
@@ -406,6 +447,12 @@ async def run_research(
                 if mat["final_report"] or mat["draft_report"] or mat["notes"] or mat["curated_sources"]:
                     # We salvaged partial output.
                     result.status = RunStatus.PARTIAL.value
+            cc_usage = _claude_code_usage(context.models)
+            # A usage cap that ended research early. A report the model wrote is still `completed`; a findings
+            # digest (no model call possible) is `partial`, because it is not a synthesised report.
+            stop_reason = mat["stopped_early"] or (cc_usage or {}).get("stopped")
+            if mat["report_mode"] == "digest" and result.status == RunStatus.COMPLETED.value:
+                result.status = RunStatus.PARTIAL.value
             result.final_report = mat["final_report"]
             result.research_brief = mat["research_brief"]
             result.draft_report = mat["draft_report"]
@@ -443,6 +490,30 @@ async def run_research(
                 "subagent_log_entries": len(observer.subagent_logs),
                 "trace_entries": len(result.trace),
             }
+            if cc_usage:
+                result.usage["claude_code"] = cc_usage
+                observer.emit(_events.USAGE_UPDATED, phase="run", agent="governor",
+                              **{k: cc_usage.get(k) for k in
+                                 ("calls", "est_cost_usd", "util", "util_first", "stopped", "stop_phase", "limits")})
+            snapshot = None
+            if stop_reason:
+                result.run_metadata["stopped_early"] = {
+                    "reason": stop_reason,
+                    "phase": (cc_usage or {}).get("stop_phase"),
+                    "report_mode": mat["report_mode"] or None,
+                }
+                # Resume state: the question, the supervisor's history and the findings, so a later run can go on.
+                if final_state.get("research_brief"):
+                    from deep_research.resume import build_snapshot
+                    snapshot = build_snapshot(
+                        prompt, cfg, final_state, run_id=run_id, thread_id=thread_id, reason=stop_reason,
+                        elapsed_minutes=final_state.get("stop_elapsed_minutes") or None,
+                        report_mode=mat["report_mode"],
+                        root_id=resume["root_id"] if resume is not None else None,
+                        resumes=(int(resume.get("resumes") or 0) + 1) if resume is not None else 0)
+                    result.run_metadata["resume_state"] = {
+                        "root_id": snapshot["root_id"], "resumes": snapshot["resumes"],
+                        "elapsed_minutes": snapshot["elapsed_minutes"]}
 
             ls_scope.finish(result.status)
 
@@ -473,6 +544,8 @@ async def run_research(
                     await deliver_artifact(observer.artifact_sink, "research_brief", result.research_brief)
                 if result.trace:
                     await deliver_artifact(observer.artifact_sink, "research_trace", result.trace)
+                if snapshot is not None:
+                    await deliver_artifact(observer.artifact_sink, "resume_state", snapshot)
 
     # The LangSmith scope flushes on exit; a late warning (e.g. flush timeout)
     # is a trace record that was not part of the logs captured above.
@@ -486,6 +559,7 @@ async def run_research(
 # Convenience re-exports so the host imports from one module.
 __all__ = [
     "run_research",
+    "resume_research",
     "RunConfig",
     "Credentials",
     "RuntimeOptions",
