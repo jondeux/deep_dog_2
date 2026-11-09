@@ -8,6 +8,7 @@
       "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore", "*.jks",
       "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
       "~/.ssh/**", "~/.aws/**", "~/.gnupg/**", "~/.config/gcloud/**", "~/.azure/**", "~/.kube/**",
+      "~/.claude/.credentials.json", "~/.claude.json",
       "~/.docker/config.json", "~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials", ".git-credentials",
       "credentials.json", "*-credentials.json", "*service-account*.json", "*serviceAccount*.json",
       "secrets.yaml", "secrets.yml", "*-secret.yaml", "*.tfstate", "*.tfstate.backup",
@@ -97,7 +98,7 @@
   "secret_var_regex": "(KEY|TOKEN|SECRET|PASSW(OR)?D|CREDENTIAL|PRIVATE|AUTH|COOKIE|SESSION)",
   "pipe_to_shell": "ask",
 
-  "approval": {"window_minutes": 30},
+  "approval": {"window_minutes": 30, "on_missing": "deny"},
 
   "context": {"git": true, "files": ["NOTES.md", "claude/project-state.md", ".claude/context/current.md"],
               "max_chars_per_file": 1500, "max_total_chars": 6000},

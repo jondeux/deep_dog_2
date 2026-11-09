@@ -11,6 +11,7 @@ override .claude/hooks-policy.json (dicts merge, lists append, scalars replace;
 from __future__ import annotations
 
 import fnmatch
+import glob
 import json
 import os
 import re
@@ -145,6 +146,82 @@ def matches(path: Path, patterns: list, project: Path) -> str | None:
             if fnmatch.fnmatchcase(s, v):
                 return pat
     return None
+
+
+GLOB_CHARS = "*?["
+GLOB_CAP = 500  # a glob that expands to more files than this is not enumerated further
+
+
+def has_glob(raw: str) -> bool:
+    return any(c in raw for c in GLOB_CHARS)
+
+
+BRACE_CAP = 64
+
+
+def brace_expand(s: str) -> list:
+    """Expand the first {a,b} group the way bash does, recursively; [s] when there is none or it would exceed the cap."""
+    depth, start = 0, -1
+    for i, c in enumerate(s):
+        if c == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                inner, parts, d, cur = s[start + 1:i], [], 0, ""
+                for ch in inner:
+                    if ch == "{":
+                        d += 1
+                    elif ch == "}":
+                        d -= 1
+                    if ch == "," and d == 0:
+                        parts.append(cur)
+                        cur = ""
+                    else:
+                        cur += ch
+                parts.append(cur)
+                if len(parts) < 2:
+                    continue  # {x} is literal in bash
+                out = []
+                for part in parts:
+                    out.extend(brace_expand(s[:start] + part + s[i + 1:]))
+                    if len(out) > BRACE_CAP:
+                        return [s]
+                return out
+    return [s]
+
+
+def shell_glob_match(pattern: str, path: str) -> bool:
+    """fnmatch with the shell's rules: * ? [] never cross a "/", and never match a leading dot."""
+    pc, sc = pattern.split("/"), path.split("/")
+    if len(pc) != len(sc):
+        return False
+    for p, s in zip(pc, sc):
+        if s.startswith(".") and not p.startswith("."):
+            return False
+        if not fnmatch.fnmatchcase(s, p):
+            return False
+    return True
+
+
+def glob_expansions(path: Path, patterns: list, project: Path) -> list:
+    """Concrete paths a shell glob could name: files that exist now, plus the policy's fixed
+    absolute paths (``~/.claude/.credentials.json``) that the glob would match even if absent."""
+    out = []
+    try:
+        for i, m in enumerate(glob.iglob(str(path))):
+            if i >= GLOB_CAP:
+                break
+            out.append(Path(m))
+    except (OSError, ValueError):
+        pass
+    for pat in patterns:
+        for v in _variants(pat, project):
+            if not has_glob(v) and shell_glob_match(str(path), v):
+                out.append(Path(v))
+    return out
 
 
 def under(path: Path, root: Path) -> bool:

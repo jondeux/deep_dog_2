@@ -174,7 +174,9 @@ def cmd_init(a) -> int:
         if cm.is_file():
             cur = cm.read_text(encoding="utf-8")
             if f"{d}/MEMORY.md" not in imports(cur):
-                plan.append(("write", cm, cur.rstrip("\n") + "\n" + line + "\n"))
+                last = cur.rstrip("\n").splitlines()[-1].strip() if cur.strip() else ""
+                gap = "\n\n" if last and not last.startswith("@") else "\n"  # not glued to a list or paragraph
+                plan.append(("write", cm, cur.rstrip("\n") + gap + line + "\n"))
         else:
             head = "@AGENTS.md\n" if (root / "AGENTS.md").is_file() else ""
             plan.append(("write", cm, head + line + "\n"))
@@ -195,6 +197,12 @@ def cmd_init(a) -> int:
         print(f"wrote {rel}")
     if not plan:
         print("nothing to do: memory already set up")
+    if a.state:
+        sf = root / state
+        if sf.is_file() and not re.search(r"(?im)^(?:-\s*)?(?:\*\*)?(?:measured|taken):?(?:\*\*)?:?\s*\d{4}-\d{2}-\d{2}",
+                                         sf.read_text(encoding="utf-8")):
+            print(f"note: the adopted state file {state} has no 'measured: YYYY-MM-DD' line, so lint will warn "
+                  "'stale'; add the line when you re-measure it")
     return 0
 
 

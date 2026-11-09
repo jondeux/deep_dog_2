@@ -38,7 +38,8 @@
               "${CLAUDE_PROJECT_DIR}/.claude/hooks/continuous-learning/learn.py",
               "status",
               "--project",
-              "${CLAUDE_PROJECT_DIR}"
+              "${CLAUDE_PROJECT_DIR}",
+              "--hook"
             ],
             "timeout": 15
           }

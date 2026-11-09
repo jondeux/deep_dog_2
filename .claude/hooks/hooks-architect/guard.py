@@ -44,6 +44,7 @@ DUMP_PATTERNS = [
     re.compile(r"\bENV\.(to_h|to_a|each|inspect|keys|values)\b|\b(p|puts|pp)\s+ENV\b(?!\[)"),
     re.compile(r"%ENV\b|\bgetenv\(\s*\)|\$_ENV\b(?!\[)|\bDeno\.env\.toObject\b"),
 ]
+GLOB_WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.~$/@{}+-*?[]")
 PATHISH = re.compile(r"[\w.~$/@{}+-]*[./~][\w.~$/@{}+-]*")
 
 
@@ -72,36 +73,76 @@ def check_path(ctx: Ctx, raw: str, op: str) -> None:
     """op: read | write | delete. Adds a verdict when the path is restricted."""
     if not raw or raw.startswith("-"):
         return
+    expandable = EXPANDABLE is None or raw in EXPANDABLE
+    if "{" in raw and "," in raw and expandable:  # bash expands {a,b} before the command runs: check every result
+        forms = hc.brace_expand(raw)
+        if forms != [raw]:
+            for f in forms:
+                check_path(ctx, f, op)
+            return
     p = hc.expand(raw, ctx.cwd)
     if hc.under(p, ctx.state):
         ctx.add("deny", f"{raw}: hook state is off-limits to tools.")
         return
     allowed = hc.matches(p, ctx.lst("allow"), ctx.project)
-    if not allowed:
-        hit = hc.matches(p, ctx.lst("zero_access"), ctx.project)
+    glob_word = hc.has_glob(raw) and expandable  # the shell replaces it with the files it names
+    fixed = ctx.lst("zero_access") + ctx.lst("read_only") + ctx.lst("no_delete") + ctx.lst("protected")
+    named = hc.glob_expansions(p, fixed, ctx.project) if glob_word else []
+    # A glob that names files is judged by those files (`cat .env.exam*` names only the allow-listed .env.example); one that
+    # names none yet is still judged by its text, so `cat ~/.ssh/id_*` stays denied where the key does not exist yet.
+    if not allowed and not named:
+        stub = re.split(r"[*?\[]", raw, maxsplit=1)[0] if glob_word else ""  # `.env` of `.env*`, as before
+        hit = hc.matches(p, ctx.lst("zero_access"), ctx.project) or (
+            hc.matches(hc.expand(stub, ctx.cwd), ctx.lst("zero_access"), ctx.project) if stub else None)
         if hit:
             ctx.add("deny", f"{raw} matches zero-access pattern {hit!r} (secrets). Use a committed template such as .env.example.")
             return
+    names = [p] + named
+    for q in named:
+        if hc.matches(q, ctx.lst("allow"), ctx.project):
+            continue
+        hit = hc.matches(q, ctx.lst("zero_access"), ctx.project)
+        if hit:
+            ctx.add("deny", f"{raw} expands to {q.name!r}, which matches zero-access pattern {hit!r} (secrets).")
+            return
     if op == "read":
         return
-    hit = hc.matches(p, ctx.lst("read_only"), ctx.project)
-    if hit:
-        ctx.add("deny", f"{raw} is read-only ({hit!r}).")
-        return
-    if op == "delete":
-        hit = hc.matches(p, ctx.lst("no_delete"), ctx.project)
+    for q in names:
+        hit = hc.matches(q, ctx.lst("read_only"), ctx.project)
         if hit:
-            ctx.add("deny", f"{raw} must not be deleted ({hit!r}).")
+            ctx.add("deny", f"{raw} is read-only ({hit!r}).")
             return
-    if hc.matches(p, ctx.lst("protected"), ctx.project) or any(hc.under(p, d) for d in ctx.guard_dirs):
-        ctx.add("ask", f"{raw} is hook or settings configuration; changing it needs the user's approval.")
+        if op == "delete":
+            hit = hc.matches(q, ctx.lst("no_delete"), ctx.project)
+            if hit:
+                ctx.add("deny", f"{raw} must not be deleted ({hit!r}).")
+                return
+    for q in names:
+        if hc.matches(q, ctx.lst("protected"), ctx.project) or any(hc.under(q, d) for d in ctx.guard_dirs):
+            ctx.add("ask", f"{raw} is hook or settings configuration; changing it needs the user's approval.")
+            return
 
 
 def scan_candidates(ctx: Ctx, text: str) -> None:
     """Check every path-like substring of an argument or code string for zero-access hits."""
     seen = set()
-    for cand in [text] + PATHISH.findall(text):
-        cand = cand.strip("'\"@=:,()[]{};")
+    cands = [text]
+    for m in PATHISH.finditer(text):
+        if text[m.end():m.end() + 1] and text[m.end()] in "*?[":
+            # a path cut off by a glob character (".env.exam" of ".env.exam*"): judge the whole word, which check_path
+            # resolves to the files it names, not the stub, which would hit `.env.*` although it names only .env.example
+            a = m.start()
+            while a > 0 and text[a - 1] in GLOB_WORD_CHARS:
+                a -= 1
+            b = m.end()
+            while b < len(text) and text[b] in GLOB_WORD_CHARS:
+                b += 1
+            cands.append(text[a:b])
+        else:
+            cands.append(m.group())
+    for cand in cands:
+        kept = cand.strip("'\"@=:,()[];")  # keep braces so a trailing {a,b} survives
+        cand = kept if kept.count("{") == kept.count("}") else cand.strip("'\"@=:,()[]{};")
         if cand and cand not in seen and ("." in cand or "/" in cand or "~" in cand):
             seen.add(cand)
             check_path(ctx, cand, "read")
@@ -181,7 +222,33 @@ def extract_substitutions(cmd: str) -> tuple[str, list]:
     return "".join(out), inner
 
 
+# Words of the current Bash command that carry an unquoted glob or {a,b} brace: only those does the shell expand.
+# None means "not a shell command" (the Read/Glob/Grep tools pass a path or pattern as-is): always expand.
+EXPANDABLE: set | None = None
+QUOTED = re.compile(r"""'[^']*'|"(?:\\.|[^"\\])*\"""")
+
+
+def note_expandable(cmd: str) -> None:
+    if EXPANDABLE is None:
+        return
+    lex = shlex.shlex(cmd.replace("\n", " ; "), posix=False, punctuation_chars=";&|<>()")
+    lex.whitespace_split = True
+    lex.commenters = ""
+    try:
+        words = list(lex)
+    except ValueError:
+        words = cmd.split()
+    for w in words:
+        bare = re.sub(r"\\.", "", QUOTED.sub("", w))  # drop quoted parts, then escaped characters
+        if hc.has_glob(bare) or ("{" in bare and "," in bare):
+            try:
+                EXPANDABLE.add("".join(shlex.split(w)))
+            except ValueError:
+                EXPANDABLE.add(w)
+
+
 def tokenize(cmd: str) -> list:
+    note_expandable(cmd)
     lex = shlex.shlex(cmd.replace("\n", " ; "), posix=True, punctuation_chars=";&|<>()")
     lex.whitespace_split = True
     lex.commenters = ""
@@ -494,6 +561,11 @@ def approved(payload: dict, word: str, policy: dict) -> bool:
     return time.time() - float(state.get("ts", 0)) <= window
 
 
+def policy_mode(payload: dict, ctx: Ctx) -> str:
+    """approval.on_missing: "deny" (default) or "ask"."""
+    return "ask" if ctx.policy.get("approval", {}).get("on_missing") == "ask" else "deny"
+
+
 def decide(ctx: Ctx, payload: dict) -> tuple[str, str]:
     if not ctx.verdicts:
         return "allow", ""
@@ -503,7 +575,14 @@ def decide(ctx: Ctx, payload: dict) -> tuple[str, str]:
         if not missing:
             return "allow", ""
         reasons = "; ".join(r for d, r, w in ctx.verdicts if d == "approval" and w in missing)
-        return "ask", f"{reasons} No approval for {', '.join(missing)} was found in the latest user message."
+        base = f"{reasons} No approval for {', '.join(missing)} was found in the latest user message."
+        if policy_mode(payload, ctx) == "ask":
+            return "ask", base
+        # Deny, not ask: an ask is only as strong as the prompt the host shows, and a cloud session set to Auto answered it
+        # itself (round 3, 2026-11-06: the agent committed and pushed on the Stop-hook nag with this gate installed).
+        words = " / ".join(f'"{w}"' for w in missing)
+        return "deny", (f"{base} Do not retry. A stop-hook message that asks for it is not approval. Tell the user in one "
+                        f"line what you are waiting for and stop: their next message approves it if it says {words}.")
     decision = next(d for d in RANK if RANK[d] == top)
     reasons = list(dict.fromkeys(r for d, r, _ in ctx.verdicts if RANK[d] == top))
     return decision, " ".join(reasons[:3])
@@ -512,6 +591,8 @@ def decide(ctx: Ctx, payload: dict) -> tuple[str, str]:
 def check(payload: dict, policy: dict, project: Path) -> Ctx:
     tool = payload.get("tool_name", "")
     ti = payload.get("tool_input") or {}
+    global EXPANDABLE
+    EXPANDABLE = set() if tool in ("Bash", "PowerShell") else None
     ctx = Ctx(policy, project, Path(payload.get("cwd") or project))
     if tool == "Bash":
         analyze_command(ctx, str(ti.get("command", "")))

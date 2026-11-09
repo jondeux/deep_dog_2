@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+claude/memory/auto-log.jsonl merge=union
+claude/memory/failures.inbox.jsonl merge=union

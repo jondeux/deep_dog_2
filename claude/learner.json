@@ -28,5 +28,8 @@
     "**/*_test.py",
     "**/*.test.*",
     "**/*.spec.*"
-  ]
+  ],
+  "auto": {
+    "enabled": false
+  }
 }
