@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "core_budget_tokens": 700,
+  "inject_budget_tokens": 1200,
+  "embed": {
+    "provider": "none",
+    "url": "",
+    "model": "",
+    "dims": 0,
+    "api_key_env": "MEM_EMBED_KEY"
+  },
+  "llm": {
+    "url": "",
+    "model": "",
+    "api_key_env": "MEM_LLM_KEY"
+  },
+  "auto_approve_skills": false,
+  "raw_retention_days": 0,
+  "redact": true,
+  "dedup_threshold": 0.85
+}

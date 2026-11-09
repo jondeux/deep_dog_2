@@ -49,3 +49,8 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+.memory/index.db*
+.memory/scratch/
+.memory/log/raw-*.jsonl
+.memory/**/*.lock
+.memory/bin/**/__pycache__/

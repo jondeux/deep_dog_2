@@ -53,6 +53,14 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.memory/bin/mem.py wake --hook"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -101,6 +109,34 @@
             ],
             "timeout": 330,
             "statusMessage": "Running stop checks"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.memory/bin/mem.py capture --hook"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.memory/bin/mem.py capture --hook"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.memory/bin/mem.py capture --hook && python3 \"${CLAUDE_PROJECT_DIR}\"/.memory/bin/mem.py extract --rules --quiet"
           }
         ]
       }
