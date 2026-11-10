@@ -30,7 +30,7 @@ def test_the_built_plugin_is_valid(tmp_path):
 
 
 def test_the_repo_skill_description_has_no_angle_brackets():
-    text = open(".claude/skills/deep-dog/SKILL.md", encoding="utf-8").read()
+    text = open("skills-src/deep-dog/SKILL.md", encoding="utf-8").read()
     desc = re.search(r"^description: (.*)$", text, re.M).group(1)
     assert "<" not in desc and ">" not in desc
 
@@ -44,3 +44,9 @@ def test_the_repo_skill_description_has_no_angle_brackets():
 def test_invalid_skills_are_refused(front, message):
     with pytest.raises(ValueError, match=message):
         load().skill_for_plugin(f"---\n{front}\n---\nbody\n")
+
+
+def test_the_project_does_not_load_a_second_copy_of_the_skill():
+    import os
+    assert not os.path.exists(".claude/skills/deep-dog"), "the plugin is the one copy; the source lives in skills-src/"
+    assert os.path.exists("skills-src/deep-dog/SKILL.md")

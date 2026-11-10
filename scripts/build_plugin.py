@@ -4,7 +4,7 @@
     python3 scripts/build_plugin.py [VERSION] [--out DIR]
 
 Upload the result under Customize > Plugins in claude.ai. To update an uploaded copy, build again with a higher
-VERSION and upload it: the repo's `.claude/skills/deep-dog/SKILL.md` stays the one source. The skill drives
+VERSION and upload it: the repo's `skills-src/deep-dog/SKILL.md` stays the one source (kept out of `.claude/skills/` on purpose, so the project does not load a second copy next to the plugin). The skill drives
 `run_research.py` and `docs/`, so it works in a session that has this repo checked out."""
 import json
 import re
@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKILL = ROOT / ".claude" / "skills" / "deep-dog" / "SKILL.md"
+SKILL = ROOT / "skills-src" / "deep-dog" / "SKILL.md"
 NAME = "deep-dog-research"
 
 
