@@ -369,6 +369,9 @@ Examples:
         picker.add_argument(f"--{role}-effort", help=f"reasoning effort for the {role} role")
     picker.add_argument("--search", default="claude", help="web search backend: claude (default, no key), exa, tavily, both")
     picker.add_argument("--list-presets", action="store_true", help="show the presets and exit")
+    picker.add_argument("--no-page-reader", action="store_true",
+                        help="with --search claude, do not read pages through WebFetch: agents get the search summary "
+                             "only (the cheaper, thinner arm)")
     picker.add_argument("--usd-cap", type=float, default=None,
                         help="list-price cap in USD for the whole run (default 5.0). Research stops at 75%% of it, "
                              "the rest is kept for writing the final report")
@@ -425,6 +428,9 @@ Examples:
                 parser.error("--usd-cap must be above 0 and --plan-window-max between 0.1 and 1")
             from dataclasses import replace
             picked = replace(picked, **caps)
+        if args.no_page_reader:
+            from dataclasses import replace
+            picked = replace(picked, claude_page_reader=False)
     elif args.resume and (args.usd_cap is not None or args.plan_window_max is not None):
         # A resumed segment gets a fresh cap; the window guard still reads the real plan window.
         if (args.usd_cap is not None and args.usd_cap <= 0) or (
@@ -435,8 +441,8 @@ Examples:
         picked = replace(config_from_snapshot(snapshot), **{k: v for k, v in (
             ("claude_code_usd_cap", args.usd_cap), ("claude_code_plan_window_max", args.plan_window_max))
             if v is not None})
-    elif args.usd_cap is not None or args.plan_window_max is not None:
-        parser.error("--usd-cap and --plan-window-max apply to Claude-plan runs: add --preset or a model flag")
+    elif args.usd_cap is not None or args.plan_window_max is not None or args.no_page_reader:
+        parser.error("--usd-cap, --plan-window-max and --no-page-reader apply to Claude-plan runs: add --preset or a model flag")
 
     if snapshot is not None:
         prompt = None

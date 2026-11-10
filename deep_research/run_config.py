@@ -101,6 +101,9 @@ class RunConfig:
     claude_code_window_reserve: float = 0.10
     # Search backend for web_search_engine="claude": Claude's own WebSearch tool, run by this model.
     claude_search_model: str = "claudecode:haiku-5.5@low"
+    # With web_search_engine="claude", fetch_urls reads the real page through Claude's WebFetch (False: the search summary is served, as before).
+    claude_page_reader: bool = True
+    claude_fetch_model: str = "claudecode:haiku-5.5@low"
 
     # ── Research timing (minutes) ──────────────────────────────────────
     research_time_min_minutes: float = _cfg.RESEARCH_TIME_MIN_MINUTES

@@ -59,3 +59,19 @@ What this settles and does not:
 - **Window baseline**: this run started from 0 %, and two sonnet calls ($0.43) used 2 %. That is about 5 % per dollar, so $2.54 would be roughly 12 %, not 70 %.
   **Inferred:** the 70 % of the first run was mostly use of the shared plan by other work before and during it. Rates vary by model mix, so treat it as a rough check.
 - Not tested: a resume that itself stops again live (chained stop is covered by the free test only).
+
+## Page reader probe (2026-11-10, owner-approved: 3 pages, haiku-5.5, hard cap $0.10; spent $0.016 in total)
+Script `probe_fetch.py`; results `probe_fetch_results_v1.json` (first reader) and `probe_fetch_results.json` (fixed reader). **Verified** from those files.
+| Page | v1 (asked for "the full text") | v2 (research topic passed, strict reply format) |
+|---|---|---|
+| nejm.org (NEJM trial) | HTTP 403, reported as text | same: clean failure text, $0.0005 |
+| pubmed.ncbi.nlm.nih.gov | **false success**: the model's apology about a cookie notice was returned as page content | clean failure: "only a cookie-requirement notice", $0.0006 |
+| en.wikipedia.org | 2,045 chars of a "condensed overview"; the tool said it read 100,000 of 145,479 characters | 1,854 chars, an extract focused on the topic with quotes; it states the article gives no enrolment counts; $0.0072, 19 s |
+
+What the probe settles:
+- **WebFetch works headless on the plan sign-in** and passed a page that plain `httpx` got a 403 for earlier (Wikipedia).
+- **WebFetch is not a raw-text fetcher.** Its own small model answers a prompt about the page, so "give me the full text" returns an overview.
+  The reader therefore passes the agent's research topic and returns a focused extract. Much richer than a 200-character search summary, but not the whole page.
+- **Two fixes came from the probe**: the topic is passed in, and a reply that is not in the agreed format is a failure (never a source).
+- **Still blocked:** publisher pages behind a 403 (NEJM) and pages behind a cookie wall (PubMed). The agent is told why and tries another source.
+  Not tested: how much this raises report quality or run cost (about $0.0006 to $0.007 per page here; a full run would make dozens of reads).

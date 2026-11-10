@@ -86,6 +86,7 @@ from deep_research.agents.substack.tools import (
     _fetch_substack_article,
 )
 from deep_research.agents.web.claude_search import claude_web_search
+from deep_research.agents.web.claude_fetch import claude_fetch_page, page_reader_enabled
 from deep_research.agents.web.tools import (
     tavily_search, exa_deep_search,
 )
@@ -375,7 +376,7 @@ def _lookup_search_full_text(search_results: dict, identifier: str) -> tuple[str
     """
     for entry in (search_results or {}).values():
         for item in entry.get("items", []):
-            if str(item.get("id", "")).strip() == identifier:
+            if str(item.get("id", "")).strip() == identifier and not item.get("snippet_only"):
                 full = (item.get("full_text") or "").strip()
                 if full:
                     return (str(item.get("title", "")), full)
@@ -1111,6 +1112,8 @@ async def tool_node(state: ResearcherState):
                             cached = _lookup_search_full_text(search_results, identifier)
                             if cached is not None:
                                 return cached
+                            if page_reader_enabled(_rt.config):
+                                return await claude_fetch_page(identifier, focus=state.get("research_topic", ""))
                         if t_name == "get_reddit_posts":
                             return await fetch_fn(
                                 identifier,

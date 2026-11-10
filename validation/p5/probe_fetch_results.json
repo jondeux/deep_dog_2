@@ -1,0 +1,69 @@
+{
+  "usage": {
+    "calls": 3,
+    "est_cost_usd": 0.008303,
+    "util": {
+      "five_hour": 0.12,
+      "seven_day": 0.2
+    },
+    "util_first": {
+      "five_hour": 0.11,
+      "seven_day": 0.2
+    },
+    "stopped": null,
+    "stop_phase": null,
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-haiku-5-5+WebFetch": {
+        "calls": 3,
+        "cost": 0.008302,
+        "input_tokens": 13635,
+        "output_tokens": 1469
+      }
+    },
+    "by_phase": {
+      "research": {
+        "calls": 3,
+        "cost": 0.008302
+      }
+    },
+    "limits": {
+      "usd_cap": 0.1,
+      "usd_research_limit": 0.1,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    }
+  },
+  "pages": [
+    {
+      "url": "https://www.nejm.org/doi/10.1056/NEJMoa2114833",
+      "title": "https://www.nejm.org/doi/10.1056/NEJMoa2114833",
+      "chars": 195,
+      "failed": true,
+      "seconds": 4.0,
+      "cost_usd": 0.0005,
+      "head": "Failed to fetch https://www.nejm.org/doi/10.1056/NEJMoa2114833: the server returned HTTP 403 Forbidden for https://www.nejm.org/doi/10.1056/NEJMoa2114833, and the response body was not retrieved.",
+      "tail": "Failed to fetch https://www.nejm.org/doi/10.1056/NEJMoa2114833: the server returned HTTP 403 Forbidden for https://www.nejm.org/doi/10.1056/NEJMoa2114833, and the response body was not retrieved."
+    },
+    {
+      "url": "https://pubmed.ncbi.nlm.nih.gov/37364268",
+      "title": "https://pubmed.ncbi.nlm.nih.gov/37364268",
+      "chars": 182,
+      "failed": true,
+      "seconds": 7.7,
+      "cost_usd": 0.0006,
+      "head": "Failed to fetch https://pubmed.ncbi.nlm.nih.gov/37364268: The page returned only a cookie-requirement notice for pubmed.ncbi.nlm.nih.gov, with no article title, abstract, or results.",
+      "tail": "Failed to fetch https://pubmed.ncbi.nlm.nih.gov/37364268: The page returned only a cookie-requirement notice for pubmed.ncbi.nlm.nih.gov, with no article title, abstract, or results."
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/Intermittent_fasting",
+      "title": "Intermittent fasting - Wikipedia",
+      "chars": 1854,
+      "failed": false,
+      "seconds": 19.1,
+      "cost_usd": 0.0072,
+      "head": "# Intermittent fasting - Wikipedia\n**URL:** https://en.wikipedia.org/wiki/Intermittent_fasting\n\nTime-restricted eating (TRE) and enrollment:\n- The article gives no enrollment counts for any TRE trial.\n- Definition: \"Time-restricted eating involves eating only during a certain number of hours each day\" (Types section).\n\nWeight:\n- \"For time restricted eating the ratio of weight loss is 4:1 for fat m",
+      "tail": "eople.\"\n\n[Partial read: the page is about 145,479 characters; only characters 0 to 100,000 were read. The remaining 45,479 characters were not read, so later sections may contain further TRE details.]"
+    }
+  ]
+}

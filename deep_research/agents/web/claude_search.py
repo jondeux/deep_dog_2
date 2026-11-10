@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from deep_research.providers.claude_code.transcript import ProtocolError, extract_json
+from deep_research.agents.web.claude_fetch import page_reader_enabled
 from deep_research.runtime import get_runtime
 
 logger = logging.getLogger(__name__)
@@ -86,4 +87,7 @@ async def claude_web_search(query: str, max_results: int = 5) -> Any:
         logger.warning("claude_web_search: unparseable reply for %r", query)
         return {"display": f"Search for '{query}' returned no parseable results. Try a different query.",
                 "items": []}
+    if page_reader_enabled(rt.config):
+        for it in items:                       # a snippet is not the page: fetch_urls must read the page itself
+            it["snippet_only"] = True
     return {"display": _display(query, items), "items": items}

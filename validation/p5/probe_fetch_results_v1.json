@@ -1,0 +1,69 @@
+{
+  "usage": {
+    "calls": 3,
+    "est_cost_usd": 0.007721,
+    "util": {
+      "five_hour": 0.1,
+      "seven_day": 0.2
+    },
+    "util_first": {
+      "five_hour": 0.1,
+      "seven_day": 0.2
+    },
+    "stopped": null,
+    "stop_phase": null,
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-haiku-5-5+WebFetch": {
+        "calls": 3,
+        "cost": 0.007721,
+        "input_tokens": 13146,
+        "output_tokens": 1620
+      }
+    },
+    "by_phase": {
+      "research": {
+        "calls": 3,
+        "cost": 0.007721
+      }
+    },
+    "limits": {
+      "usd_cap": 0.1,
+      "usd_research_limit": 0.1,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    }
+  },
+  "pages": [
+    {
+      "url": "https://www.nejm.org/doi/10.1056/NEJMoa2114833",
+      "title": "https://www.nejm.org/doi/10.1056/NEJMoa2114833",
+      "chars": 147,
+      "failed": true,
+      "seconds": 4.1,
+      "cost_usd": 0.0006,
+      "head": "Failed to fetch https://www.nejm.org/doi/10.1056/NEJMoa2114833: The server returned HTTP 403 Forbidden, so the page content could not be retrieved.",
+      "tail": "Failed to fetch https://www.nejm.org/doi/10.1056/NEJMoa2114833: The server returned HTTP 403 Forbidden, so the page content could not be retrieved."
+    },
+    {
+      "url": "https://pubmed.ncbi.nlm.nih.gov/37364268",
+      "title": "https://pubmed.ncbi.nlm.nih.gov/37364268",
+      "chars": 609,
+      "failed": false,
+      "seconds": 6.4,
+      "cost_usd": 0.0007,
+      "head": "# https://pubmed.ncbi.nlm.nih.gov/37364268\n**URL:** https://pubmed.ncbi.nlm.nih.gov/37364268\n\nI tried to open https://pubmed.ncbi.nlm.nih.gov/37364268, but the page returned only a cookie notice asking for cookies to be enabled, plus an HHS Vulnerability Disclosure link. No article content came through, so I don't have the title, authors, abstract, or other details.\n\nWhat would you like me to do w",
+      "tail": "article? If you paste the abstract or citation here, I can work with that. Or I can try the same PMID through another source, such as the NCBI E-utilities API or the DOI landing page, if you have one."
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/Intermittent_fasting",
+      "title": "Intermittent fasting",
+      "chars": 2045,
+      "failed": false,
+      "seconds": 12.1,
+      "cost_usd": 0.0064,
+      "head": "# Intermittent fasting\n**URL:** https://en.wikipedia.org/wiki/Intermittent_fasting\n\nThe fetch did not return the full article text. The tool gave a condensed overview instead of verbatim content, and it read only the first 100,000 of about 145,479 characters. The overview is below.\n\n- **Definition:** Intermittent fasting (IF) is \"various meal timing schedules that cycle between voluntary fasting\" ",
+      "tail": "pular US diet in 2018.\n\nNot included: the remaining ~45,000 characters, which would contain the rest of the article and the reference list. Re-fetching from offset 100000 would be needed to read them."
+    }
+  ]
+}
