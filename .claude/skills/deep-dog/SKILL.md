@@ -1,9 +1,9 @@
 ---
-name: deep-dog
-description: Run a Deep Dog 2 research job (a cited report) on the owner's own Claude plan, with a model and reasoning-effort picker per role. Use when the owner asks for deep research, a cited report, or "/deep-dog <question>". Personal use only; never approves its own spend.
+name: deep-dog-Research
+description: Run a Deep Dog 2 research job (a cited report) on the owner's own Claude plan, with a model and reasoning-effort picker per role. Use when the owner asks for deep research, a cited report, or "/deep-dog-Research <question>". Personal use only; never approves its own spend.
 ---
 
-# /deep-dog
+# /deep-dog-Research
 
 Runs `python run_research.py` with every LLM call and the web search going through the unmodified `claude` CLI on the
 owner's own plan. Nothing here uses provider API keys.
