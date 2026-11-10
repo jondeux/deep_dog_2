@@ -75,3 +75,33 @@ What the probe settles:
 - **Two fixes came from the probe**: the topic is passed in, and a reply that is not in the agreed format is a failure (never a source).
 - **Still blocked:** publisher pages behind a 403 (NEJM) and pages behind a cookie wall (PubMed). The agent is told why and tries another source.
   Not tested: how much this raises report quality or run cost (about $0.0006 to $0.007 per page here; a full run would make dozens of reads).
+
+## Page reader on vs off, same question (`live2` vs `live1`, 2026-11-10, owner-approved, cap $3.00)
+Same question, economy preset, `--search claude`, defaults; only the page reader differs (`live1` = summaries only, `live2` = reader on). One run each.
+Usage: `live2_usage.json`; reports: `reports/`. Figures are **verified** from the usage files and logs; the reading of the reports is my judgement (see limits).
+| | live1 (summaries) | live2 (page reader) |
+|---|---|---|
+| Outcome | stopped early by the window guard at 14.4 min, report written | completed, research clock reached 15.5 min, no stop |
+| Cost (list price) | $2.5382, 133 calls | **$1.8149**, 154 calls |
+| Wall time | 966 s | 1,068 s |
+| Supervisor iterations | 5 | 4 |
+| Sub-agents | 15 (about 70 s each) | 9 (185 to 290 s each) |
+| Sources logged | 51 | 21 |
+| Report | 28,459 chars body, 52 distinct citations | 28,274 chars body, 17 distinct citations |
+| Unit/count numbers in the report | 33 | 56 |
+| By model | sonnet 10 calls $1.69; haiku 81 calls $0.20; haiku+WebSearch 42 calls $0.65 | sonnet 7 calls $1.18; haiku 53 calls $0.16; WebSearch 19 calls $0.27; **WebFetch 75 calls $0.21** |
+| Final-report call | not isolated | **$0.4520** (research $1.3629) |
+| Window | five-hour 70 % at the end, start not recorded | five-hour 13 % to 19 %, seven-day 20 % to 21 % |
+
+Reading of the two reports (one reader, the same model family that built the engine, so not independent; no judge, no reference report):
+- **Evidence quality is higher with the reader.** The `live2` summary rests on primary figures with intervals (a 2025 BMJ network meta-analysis, 99 trials, 6,582 adults; ADF 1.29 kg more than calorie restriction, 95 % CI; a pooled blood-pressure difference with CI; a 12-month TRE trial), and it says which trials it could not verify.
+  `live1` states several effect sizes "press-reported" and says some intervals came only from abstracts or news coverage.
+- **Coverage is lower.** `live2` has 17 distinct citations to `live1`'s 52 and omits trials that `live1` covered (the NEJM 2022 and Annals 2023 TRE trials, the 2017 alternate-day fasting trial), saying it could not verify them. The probe showed why: publisher pages return 403 and PubMed returned a cookie wall.
+- **Fewer sources because each agent is slower.** Reads take time; 9 agents finished in the same 15-minute window where 15 did before. Cost fell mostly because fewer rounds ran, not because a read is cheap.
+- **The number check is not comparable.** `live1` was checked against its full saved state (nothing absent). `live2` saved no resume file, so only the agents' notes and titles were available and 12 of its 56 numbers were not found there. That says the check had less material, not that the numbers are wrong.
+
+What it does not settle: one run each, no variance; no judge; I did not verify any study's facts against primary sources; whether "fewer, deeper sources" scores higher on a benchmark such as RACE is unknown.
+
+Measurements for the reserve and the window:
+- **Report call $0.45** (`live2`) and $0.13 (resume of `live1`, a smaller history). The 25 % reserve of a $3 cap ($0.75) holds, but at a $1 cap it would be $0.25, below the $0.45 measured. **Open:** give the reserve a floor in dollars.
+- **Window:** `live2` used 6 points of the five-hour window for $1.81 (about 3.3 points per dollar) and 1 point of the seven-day window. That is consistent with `live1`'s 70 % having been mostly a high starting level, and puts a full-size run at roughly 8 to 12 % of the five-hour window.

@@ -17,7 +17,7 @@ owner's own plan. Nothing here uses provider API keys.
    - `testing-framework`: sonnet-5.5 medium / haiku-5.5 medium (cheapest of the four)
    Offer per-role overrides (`--supervisor-model/--supervisor-effort`, same for `--draft-` and `--subagent-`). Efforts: low, medium, high, xhigh, max.
    Search: `--search claude` (default, no key) or `exa` / `tavily` / `both` (the owner's own keys, set outside chat).
-   With `--search claude`, agents read pages through Claude's WebFetch, which returns an extract focused on the agent's topic, not the whole page (probe: $0.0005 to $0.007 per page; publisher 403s and cookie walls come back as failures). `--no-page-reader` keeps the thinner search-summary-only arm.
+   With `--search claude`, agents read pages through Claude's WebFetch, which returns an extract focused on the agent's topic, not the whole page (probe: $0.0005 to $0.007 per page; publisher 403s and cookie walls come back as failures). Each agent reads 3 pages that way (`--page-reads N`; its other reads stay search summaries, which keeps breadth; 0 = no limit, slower and deeper). `--no-page-reader` keeps the thinner search-summary-only arm.
 3. **Show the cost gauge before running.** Relative cost per token: haiku 1x, sonnet about 6x, opus about 11x (measured, one run per cell;
    the effort level's own multiplier is not measured). Measured reference: a small run (3 supervisor iterations, 4 sub-agents,
    `testing-framework`) cost about $0.55 list price and used about 3 to 8 % of the five-hour window (`validation/p4`).

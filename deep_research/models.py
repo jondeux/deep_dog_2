@@ -97,7 +97,8 @@ class ModelFactory:
             self._governor = Governor(
                 plan_window_max=c.claude_code_plan_window_max, usd_cap=c.claude_code_usd_cap,
                 max_concurrent=c.claude_code_max_concurrent, timeout_s=c.claude_code_timeout_seconds,
-                report_reserve=c.claude_code_report_reserve, window_reserve=c.claude_code_window_reserve)
+                report_reserve=c.claude_code_report_reserve, window_reserve=c.claude_code_window_reserve,
+                report_reserve_floor_usd=c.claude_code_report_reserve_floor_usd)
         return self._governor
 
     def usage(self) -> Optional[dict]:

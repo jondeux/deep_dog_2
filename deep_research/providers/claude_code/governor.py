@@ -32,10 +32,11 @@ class Governor:
 
     def __init__(self, plan_window_max: float = 0.8, usd_cap: Optional[float] = 5.0,
                  max_concurrent: int = 3, timeout_s: float = 600.0,
-                 report_reserve: float = 0.25, window_reserve: float = 0.1):
+                 report_reserve: float = 0.25, window_reserve: float = 0.1, report_reserve_floor_usd: float = 0.0):
         self.plan_window_max = plan_window_max
         self.usd_cap = usd_cap
         self.report_reserve = min(max(float(report_reserve), 0.0), 0.9)
+        self.report_reserve_floor_usd = max(float(report_reserve_floor_usd), 0.0)
         self.window_reserve = min(max(float(window_reserve), 0.0), max(plan_window_max - 0.05, 0.0))
         self.max_concurrent = max(1, int(max_concurrent))
         self.timeout_s = float(timeout_s)
@@ -52,7 +53,12 @@ class Governor:
         self.by_phase: dict = {}      # cost of research calls vs final-report calls (sizes the report reserve)
 
     def limits(self) -> dict:
-        usd_research = None if self.usd_cap is None else round(self.usd_cap * (1 - self.report_reserve), 6)
+        usd_research = None
+        if self.usd_cap is not None:
+            # The report call has a dollar cost of its own (measured $0.45 at a $3 cap), so a percentage alone is too
+            # little at a small cap: reserve the larger of the two, but never more than 60% of the cap.
+            reserve = min(max(self.usd_cap * self.report_reserve, self.report_reserve_floor_usd), self.usd_cap * 0.6)
+            usd_research = round(self.usd_cap - reserve, 6)
         return {"usd_cap": self.usd_cap, "usd_research_limit": usd_research,
                 "plan_window_max": self.plan_window_max,
                 "plan_window_research_limit": round(self.plan_window_max - self.window_reserve, 6)}

@@ -1,0 +1,64 @@
+{
+  "thread_id": "live2",
+  "status": "completed",
+  "stopped_early": null,
+  "usage": {
+    "calls": 154,
+    "est_cost_usd": 1.814906,
+    "util": {
+      "five_hour": 0.19,
+      "seven_day": 0.21
+    },
+    "util_first": {
+      "five_hour": 0.13,
+      "seven_day": 0.2
+    },
+    "stopped": null,
+    "stop_phase": null,
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "calls": 7,
+        "cost": 1.175458,
+        "input_tokens": 226736,
+        "output_tokens": 41523
+      },
+      "claude-haiku-5-5": {
+        "calls": 53,
+        "cost": 0.159718,
+        "input_tokens": 554726,
+        "output_tokens": 136902
+      },
+      "claude-haiku-5-5+WebSearch": {
+        "calls": 19,
+        "cost": 0.272537,
+        "input_tokens": 108509,
+        "output_tokens": 26288
+      },
+      "claude-haiku-5-5+WebFetch": {
+        "calls": 75,
+        "cost": 0.207195,
+        "input_tokens": 468782,
+        "output_tokens": 73902
+      }
+    },
+    "by_phase": {
+      "research": {
+        "calls": 153,
+        "cost": 1.362904
+      },
+      "report": {
+        "calls": 1,
+        "cost": 0.452002
+      }
+    },
+    "limits": {
+      "usd_cap": 3.0,
+      "usd_research_limit": 2.25,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    }
+  },
+  "elapsed_seconds": 1068.38,
+  "report_file": "outputs/research_2026-11-10_01-25-49_idp.md"
+}

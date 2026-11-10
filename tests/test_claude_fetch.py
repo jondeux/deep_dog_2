@@ -182,3 +182,89 @@ def test_cli_switch_turns_the_page_reader_off(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--no-page-reader"])
     with pytest.raises(SystemExit):
         rr.main()
+
+
+# ── hybrid reading: a few pages per agent are read in full, the rest stay summaries ─────────────────────────
+URL_B = "https://example.com/b"
+TWO = json.dumps([{"title": "Page A", "url": URL, "snippet": "summary of A"},
+                  {"title": "Page B", "url": URL_B, "snippet": "summary of B"}])
+
+
+def hybrid_script(*middle):
+    return [decision(("claude_web_search", {"query": "q"})), {"text": TWO, "cost": 0.01}, *middle,
+            decision(("batch_save_selected", {"items": [{"ref": "S1", "index": 1, "reason": "a"},
+                                                        {"ref": "S1", "index": 2, "reason": "b"}]})),
+            decision(("finish_research", {"summary": "done"}))]
+
+
+def texts(out):
+    return {c["url"]: c["full_text"] for c in (out.get("curated_sources") or [])}
+
+
+def test_the_budget_reads_the_first_pages_and_leaves_the_rest_as_summaries(fake_claude):
+    fake_claude.script(hybrid_script(decision(("fetch_urls", {"urls": [URL, URL_B]})),
+                                     {"text": f"TITLE: Page A\n---\n{PAGE}", "cost": 0.01}))
+    out = run_subagent(runtime(claude_page_reads_per_agent=1))
+    assert len(webfetch_calls(fake_claude)) == 1                       # only one page was read through WebFetch
+    t = texts(out)
+    assert "4,158 adults" in t[URL] and "summary of B" in t[URL_B]     # A in depth, B still saved (breadth kept)
+
+
+def test_a_failed_read_does_not_use_up_the_budget(fake_claude):
+    fake_claude.script(hybrid_script(decision(("fetch_urls", {"urls": [URL]})),
+                                     {"text": "FETCH_FAILED: HTTP 403", "cost": 0.01},
+                                     decision(("fetch_urls", {"urls": [URL_B]})),
+                                     {"text": f"TITLE: Page B\n---\nPAGE B TEXT {PAGE}", "cost": 0.01}))
+    out = run_subagent(runtime(claude_page_reads_per_agent=1))
+    assert len(webfetch_calls(fake_claude)) == 2                       # the 403 on A left the slot free for B
+    assert "PAGE B TEXT" in texts(out)[URL_B]
+
+
+def test_zero_means_every_read_goes_through_the_reader(fake_claude):
+    same = {"text": f"TITLE: A page\n---\nPAGE TEXT {PAGE}", "cost": 0.01}       # two reads run at once: identical replies
+    fake_claude.script(hybrid_script(decision(("fetch_urls", {"urls": [URL, URL_B]})), same, same))
+    out = run_subagent(runtime(claude_page_reads_per_agent=0))
+    assert len(webfetch_calls(fake_claude)) == 2
+    t = texts(out)
+    assert "PAGE TEXT" in t[URL] and "PAGE TEXT" in t[URL_B]
+
+
+def test_the_agent_is_told_when_a_read_was_only_a_summary(fake_claude):
+    fake_claude.script(hybrid_script(decision(("fetch_urls", {"urls": [URL, URL_B]})),
+                                     {"text": f"TITLE: Page A\n---\n{PAGE}", "cost": 0.01}))
+    out = run_subagent(runtime(claude_page_reads_per_agent=1))
+    seen = json.dumps([str(m.content) for m in out["researcher_messages"]])
+    assert "page-read budget" in seen                                  # the agent can see why B is thin
+
+
+def test_the_search_results_tell_the_agent_about_the_budget(fake_claude):
+    fake_claude.script([{"text": TWO, "cost": 0.01}])
+    out = run_in(runtime(claude_page_reads_per_agent=3),
+                 lambda: claude_web_search.ainvoke({"query": "q", "max_results": 3}))
+    assert "3 pages" in out["display"] and "primary" in out["display"]
+    fake_claude.script([{"text": TWO, "cost": 0.01}])
+    out2 = run_in(runtime(claude_page_reader=False), lambda: claude_web_search.ainvoke({"query": "q", "max_results": 3}))
+    assert "primary" not in out2["display"]                              # reader off: the old, plain footer
+
+
+def test_cli_page_reads_flag(monkeypatch):
+    import importlib.util, sys
+    spec = importlib.util.spec_from_file_location("rr_reads", "run_research.py")
+    rr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rr)
+    seen = {}
+
+    async def fake_run(prompt, output_dir, thread_id=None, clean_output=False, config=None, **kw):
+        seen["config"] = config
+        return {"output_file": "x", "status": "completed"}
+    monkeypatch.setattr(rr, "run_research", fake_run)
+    monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--preset", "economy"])
+    rr.main()
+    assert seen["config"].claude_page_reads_per_agent == 3
+    monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--preset", "economy", "--page-reads", "0"])
+    rr.main()
+    assert seen["config"].claude_page_reads_per_agent == 0
+    for bad in (["--page-reads", "2"], ["--preset", "economy", "--page-reads", "-1"]):
+        monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", *bad])
+        with pytest.raises(SystemExit):
+            rr.main()

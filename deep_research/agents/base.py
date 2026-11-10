@@ -366,7 +366,7 @@ def _find_in_search_results(search_results: dict, identifier: str) -> tuple[str,
     return None
 
 
-def _lookup_search_full_text(search_results: dict, identifier: str) -> tuple[str, str] | None:
+def _lookup_search_full_text(search_results: dict, identifier: str, allow_snippet: bool = False) -> tuple[str, str] | None:
     """Return (title, full_text) already captured by a web search, if any.
 
     Search tools retain the full text returned by the provider (Exa `text` /
@@ -376,7 +376,7 @@ def _lookup_search_full_text(search_results: dict, identifier: str) -> tuple[str
     """
     for entry in (search_results or {}).values():
         for item in entry.get("items", []):
-            if str(item.get("id", "")).strip() == identifier and not item.get("snippet_only"):
+            if str(item.get("id", "")).strip() == identifier and (allow_snippet or not item.get("snippet_only")):
                 full = (item.get("full_text") or "").strip()
                 if full:
                     return (str(item.get("title", "")), full)
@@ -1105,6 +1105,32 @@ async def tool_node(state: ResearcherState):
                         print(f"    → {t_name}(...) in {elapsed:.1f}s")
                         return (tc, content, extra_state)
 
+                    # Hybrid reading (--search claude): this agent reads a few pages through WebFetch; its other
+                    # reads stay search summaries. A failed read is free, so the agent can try another source.
+                    _budget = int(getattr(_rt.config, "claude_page_reads_per_agent", 0) or 0)
+                    _used = sum(1 for v in articles_read.values() if isinstance(v, dict) and v.get("page_read"))
+                    _slots = [max(0, _budget - _used)] if _budget > 0 else [None]       # None: no limit
+                    _reader_ok: set = set()
+                    _summary_only: list = []
+
+                    async def _read_page(identifier: str):
+                        if _slots[0] is not None:
+                            if _slots[0] <= 0:
+                                snip = _lookup_search_full_text(search_results, identifier, allow_snippet=True)
+                                if snip is None:
+                                    return (identifier, f"Not read: this agent's page-read budget of {_budget} pages "
+                                                        "is used and this URL has no search summary.")
+                                _summary_only.append(identifier)
+                                return snip
+                            _slots[0] -= 1
+                        title, body = await claude_fetch_page(identifier, focus=state.get("research_topic", ""))
+                        if body.startswith("Failed to fetch"):
+                            if _slots[0] is not None:
+                                _slots[0] += 1
+                        else:
+                            _reader_ok.add(identifier)
+                        return title, body
+
                     async def _read_one(identifier: str):
                         # Serve the full text already captured by a web search
                         # instead of re-fetching the URL (avoid double fetch).
@@ -1113,7 +1139,7 @@ async def tool_node(state: ResearcherState):
                             if cached is not None:
                                 return cached
                             if page_reader_enabled(_rt.config):
-                                return await claude_fetch_page(identifier, focus=state.get("research_topic", ""))
+                                return await _read_page(identifier)
                         if t_name == "get_reddit_posts":
                             return await fetch_fn(
                                 identifier,
@@ -1144,7 +1170,7 @@ async def tool_node(state: ResearcherState):
                         if _rt.config.chinese_moderation and contains_sensitive(body):
                             skipped += 1
                             continue
-                        articles_read[identifier] = {"content": body}
+                        articles_read[identifier] = {"content": body, **({"page_read": True} if identifier in _reader_ok else {})}
                         tag = _find_ref_tag(search_results, identifier)
                         header = f"[{tag}] {identifier}" if tag else identifier
                         parts.append(f"=== {header} ===\n\n{body}")
@@ -1152,6 +1178,9 @@ async def tool_node(state: ResearcherState):
                         parts.append(f"(source skipped: {skipped} item(s) filtered)")
                     if errors:
                         parts.append("(Skipped: " + "; ".join(errors[:5]) + ")")
+                    if _summary_only:
+                        parts.append(f"(Summary only for {len(_summary_only)} item(s): this agent's page-read budget of "
+                                     f"{_budget} pages is used. Save from the summaries, or finish.)")
                     if requested > allowed:
                         parts.append(f"(Read cap: {allowed} items this iteration "
                                      f"— {requested - allowed} not read. Use batch_save_selected on what you have.)")

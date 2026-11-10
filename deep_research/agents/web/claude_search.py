@@ -43,14 +43,22 @@ def _items_from(text: str, n: int) -> list:
     return items
 
 
-def _display(query: str, items: list) -> str:
+def _display(query: str, items: list, reads: int = -1) -> str:
     if not items:
         return f"No results for '{query}'."
     lines = [f"## Search results for '{query}'", ""]
     for it in items:
         lines += [f"- **{it['title']}**", f"  URL: {it['url']}", f"  {it['full_text']}", ""]
-    lines.append("Read a source with fetch_urls(urls=[...]), then save it with "
-                 'batch_save_selected(items=[{"ref": "S#", "index": N, "reason": "..."}]).')
+    if reads >= 0:
+        # Page reader on: tell the agent how deep it may go, so the reads go to the sources that matter.
+        limit = f"up to {reads} pages" if reads else "pages"
+        lines.append(f"You may read {limit} in full with fetch_urls(urls=[...]) (it extracts what is relevant to your "
+                     "topic). Spend the reads on primary sources (trials, reviews, official documents); the other results "
+                     "stay available as the summaries above. Then save with "
+                     'batch_save_selected(items=[{"ref": "S#", "index": N, "reason": "..."}]).')
+    else:
+        lines.append("Read a source with fetch_urls(urls=[...]), then save it with "
+                     'batch_save_selected(items=[{"ref": "S#", "index": N, "reason": "..."}]).')
     return "\n".join(lines)
 
 
@@ -87,7 +95,9 @@ async def claude_web_search(query: str, max_results: int = 5) -> Any:
         logger.warning("claude_web_search: unparseable reply for %r", query)
         return {"display": f"Search for '{query}' returned no parseable results. Try a different query.",
                 "items": []}
-    if page_reader_enabled(rt.config):
+    reader = page_reader_enabled(rt.config)
+    if reader:
         for it in items:                       # a snippet is not the page: fetch_urls must read the page itself
             it["snippet_only"] = True
-    return {"display": _display(query, items), "items": items}
+    return {"display": _display(query, items, int(rt.config.claude_page_reads_per_agent) if reader else -1),
+            "items": items}

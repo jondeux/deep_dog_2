@@ -329,3 +329,31 @@ def test_cost_is_split_into_research_and_report_so_the_reserve_can_be_sized():
     assert by["research"] == {"calls": 1, "cost": pytest.approx(0.30)}
     assert by["report"] == {"calls": 1, "cost": pytest.approx(0.20)}
     assert "report phase: $0.2000" in cc.format_usage({**g.stats()})
+
+
+# ── dollar floor on the report reserve (measured: the report call cost $0.45 at a $3 cap) ─────────────────────
+def test_the_report_reserve_has_a_dollar_floor_but_never_swallows_the_run():
+    big = Governor(usd_cap=3.0, report_reserve=0.25, report_reserve_floor_usd=0.5)
+    assert big.limits()["usd_research_limit"] == pytest.approx(2.25)          # 25% ($0.75) already above the floor
+    small = Governor(usd_cap=1.0, report_reserve=0.25, report_reserve_floor_usd=0.5)
+    assert small.limits()["usd_research_limit"] == pytest.approx(0.5)         # the floor beats 25% ($0.25)
+    tiny = Governor(usd_cap=0.6, report_reserve=0.25, report_reserve_floor_usd=0.5)
+    assert tiny.limits()["usd_research_limit"] == pytest.approx(0.24)         # never reserve more than 60% of the cap
+    off = Governor(usd_cap=1.0, report_reserve=0.25, report_reserve_floor_usd=0.0)
+    assert off.limits()["usd_research_limit"] == pytest.approx(0.75)
+    assert Governor(usd_cap=None, report_reserve_floor_usd=0.5).limits()["usd_research_limit"] is None
+
+
+def test_the_floor_is_what_stops_research_early_at_a_small_cap():
+    g = Governor(usd_cap=1.0, report_reserve=0.25, report_reserve_floor_usd=0.5)
+    g.cost = 0.55
+    with pytest.raises(GovernorStop):
+        g.check()                                  # research stops at $0.50, leaving $0.45 for the report call
+    g.check("report")
+
+
+def test_the_config_default_floor_reaches_the_governor():
+    cfg = api_config()
+    assert cfg.claude_code_report_reserve_floor_usd == 0.5
+    f = ModelFactory(mp.apply_preset(api_config(claude_code_usd_cap=1.0), "testing-framework"))
+    assert f.governor.limits()["usd_research_limit"] == pytest.approx(0.5)

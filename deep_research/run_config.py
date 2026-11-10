@@ -99,10 +99,14 @@ class RunConfig:
     # Kept back for the final report: research stops at usd_cap*(1-reserve) and at plan_window_max-window_reserve.
     claude_code_report_reserve: float = 0.25
     claude_code_window_reserve: float = 0.10
+    # ...and at least this many dollars (the final-report call cost $0.45 in a measured run); never more than 60% of the cap.
+    claude_code_report_reserve_floor_usd: float = 0.5
     # Search backend for web_search_engine="claude": Claude's own WebSearch tool, run by this model.
     claude_search_model: str = "claudecode:haiku-5.5@low"
     # With web_search_engine="claude", fetch_urls reads the real page through Claude's WebFetch (False: the search summary is served, as before).
     claude_page_reader: bool = True
+    # Hybrid reading: each agent reads this many pages through WebFetch; its other reads stay search summaries (0 = no limit).
+    claude_page_reads_per_agent: int = 3
     claude_fetch_model: str = "claudecode:haiku-5.5@low"
 
     # ── Research timing (minutes) ──────────────────────────────────────

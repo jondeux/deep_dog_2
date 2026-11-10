@@ -12,7 +12,7 @@ Python 3.11+ multi-agent research engine (LangGraph) that turns a question into 
 - Measure project state: `bash scripts/state_snapshot.sh` (runs the full suite, read-only; paste the result into `claude/project-state.md`)
 - Run a research job: `python run_research.py --prompt "..."` (needs `.env`, see `.env.example`)
 - Run on the Claude plan (no provider keys): `python run_research.py --prompt "..." --preset economy` (also `benchmark`, `custom`, `testing-framework`; `--list-presets`; `--search claude|exa|tavily|both`)
-- Claude-plan run controls: `--supervisor-model/--supervisor-effort` (same for `--draft-`, `--subagent-`), `--usd-cap`, `--plan-window-max`, `--no-page-reader`. The run prints its usage and writes `usage_<ts>.json`.
+- Claude-plan run controls: `--supervisor-model/--supervisor-effort` (same for `--draft-`, `--subagent-`), `--usd-cap`, `--plan-window-max`, `--no-page-reader`, `--page-reads N`. The run prints its usage and writes `usage_<ts>.json`.
 - Continue a run a usage cap stopped: `python run_research.py --resume <id>` (state in `deep-research-memory/`, see `claude/memory/deep-research-memory.md`).
 - Run the web UI: `python webui/app.py` (127.0.0.1:7860; honours `GRADIO_SERVER_NAME` / `GRADIO_SERVER_PORT`)
 - Build the Space bundle: `bash webui/build_space.sh <empty-dir> gradio`

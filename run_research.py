@@ -372,6 +372,9 @@ Examples:
     picker.add_argument("--no-page-reader", action="store_true",
                         help="with --search claude, do not read pages through WebFetch: agents get the search summary "
                              "only (the cheaper, thinner arm)")
+    picker.add_argument("--page-reads", type=int, default=None, metavar="N",
+                        help="with --search claude: pages each agent reads through WebFetch (default 3; its other reads stay "
+                             "search summaries; 0 = no limit, the slower, deeper arm)")
     picker.add_argument("--usd-cap", type=float, default=None,
                         help="list-price cap in USD for the whole run (default 5.0). Research stops at 75%% of it, "
                              "the rest is kept for writing the final report")
@@ -431,6 +434,11 @@ Examples:
         if args.no_page_reader:
             from dataclasses import replace
             picked = replace(picked, claude_page_reader=False)
+        if args.page_reads is not None:
+            if args.page_reads < 0:
+                parser.error("--page-reads must be 0 or more")
+            from dataclasses import replace
+            picked = replace(picked, claude_page_reads_per_agent=args.page_reads)
     elif args.resume and (args.usd_cap is not None or args.plan_window_max is not None):
         # A resumed segment gets a fresh cap; the window guard still reads the real plan window.
         if (args.usd_cap is not None and args.usd_cap <= 0) or (
@@ -441,8 +449,9 @@ Examples:
         picked = replace(config_from_snapshot(snapshot), **{k: v for k, v in (
             ("claude_code_usd_cap", args.usd_cap), ("claude_code_plan_window_max", args.plan_window_max))
             if v is not None})
-    elif args.usd_cap is not None or args.plan_window_max is not None or args.no_page_reader:
-        parser.error("--usd-cap, --plan-window-max and --no-page-reader apply to Claude-plan runs: add --preset or a model flag")
+    elif args.usd_cap is not None or args.plan_window_max is not None or args.no_page_reader \
+            or args.page_reads is not None:
+        parser.error("--usd-cap, --plan-window-max, --no-page-reader and --page-reads apply to Claude-plan runs: add --preset or a model flag")
 
     if snapshot is not None:
         prompt = None
