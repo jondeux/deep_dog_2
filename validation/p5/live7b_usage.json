@@ -1,0 +1,75 @@
+{
+  "thread_id": "live7b",
+  "status": "completed",
+  "stopped_early": {
+    "reason": "report_reserve",
+    "phase": null,
+    "report_mode": "synthesized"
+  },
+  "usage": {
+    "calls": 22,
+    "est_cost_usd": 1.827921,
+    "util": {
+      "five_hour": 0.14,
+      "seven_day": 0.37
+    },
+    "util_first": {
+      "five_hour": 0,
+      "seven_day": 0.36
+    },
+    "stopped": null,
+    "stop_phase": null,
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "calls": 5,
+        "cost": 0.92166,
+        "input_tokens": 174126,
+        "output_tokens": 29852
+      },
+      "claude-haiku-5-5": {
+        "calls": 17,
+        "cost": 0.906262,
+        "input_tokens": 1226481,
+        "output_tokens": 68139
+      }
+    },
+    "by_phase": {
+      "research": {
+        "calls": 21,
+        "cost": 1.200196
+      },
+      "report": {
+        "calls": 1,
+        "cost": 0.627728
+      }
+    },
+    "limits": {
+      "usd_cap": 2.0,
+      "usd_research_limit": 1.8,
+      "dynamic_research_limit": 1.262856,
+      "report_budget_usd": null,
+      "dynamic_reserve": true,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    },
+    "report_plan": {
+      "action": "trimmed",
+      "budget_usd": 0.7998068999999999,
+      "projected_usd": 0.7998,
+      "text_limit": 16888,
+      "source_chars_before": 694367,
+      "source_chars_after": 210454
+    },
+    "reserve_check": {
+      "spent_usd": 1.2002,
+      "next_round_usd": 0.3,
+      "report_usd": 0.5657,
+      "cap_usd": 2.0,
+      "stopped": true,
+      "research_limit_usd": 1.4343
+    }
+  },
+  "elapsed_seconds": 373.12,
+  "report_file": "outputs/research_2026-11-10_19-46-16_ypa.md"
+}
