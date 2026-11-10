@@ -1,6 +1,6 @@
 ---
 name: deep-dog-Research
-description: Run a Deep Dog 2 research job (a cited report) on the owner's own Claude plan, with a model and reasoning-effort picker per role, optional third-party models (deepinfra, openrouter, together, fireworks) and every engine setting as a switch. Use when the owner asks for deep research, a cited report, or "/deep-dog-Research <question>". Personal use only; never approves its own spend.
+description: Run a Deep Dog 2 research job (a cited report) on the owner's own Claude plan, with a model and reasoning-effort picker per role, optional third-party models (deepinfra, openrouter, together, fireworks) and every engine setting as a switch. Use when the owner asks for deep research, a cited report, or types the /deep-dog-Research command followed by a question. Personal use only; never approves its own spend.
 ---
 
 # /deep-dog-Research
