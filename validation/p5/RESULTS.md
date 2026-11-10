@@ -105,3 +105,55 @@ What it does not settle: one run each, no variance; no judge; I did not verify a
 Measurements for the reserve and the window:
 - **Report call $0.45** (`live2`) and $0.13 (resume of `live1`, a smaller history). The 25 % reserve of a $3 cap ($0.75) holds, but at a $1 cap it would be $0.25, below the $0.45 measured. **Open:** give the reserve a floor in dollars.
 - **Window:** `live2` used 6 points of the five-hour window for $1.81 (about 3.3 points per dollar) and 1 point of the seven-day window. That is consistent with `live1`'s 70 % having been mostly a high starting level, and puts a full-size run at roughly 8 to 12 % of the five-hour window.
+
+## Hybrid reading, and a failed Exa arm (`live3`, `live4`, 2026-11-10, owner-approved, $3 cap each)
+Same question and economy preset as `live1`/`live2`. Usage: `live3_usage.json`, `live4_usage.json`; reports in `reports/`. Figures are **verified** from the usage files and logs.
+
+### live3: hybrid reading (3 pages per agent), `--search claude`
+| | live1 (summaries) | live2 (read all) | **live3 (hybrid)** |
+|---|---|---|---|
+| Outcome | window-guard stop, report written | completed | **completed, no stop** |
+| Cost (list price) | $2.5382 / 133 calls | $1.8149 / 154 | **$2.5559 / 183 calls** |
+| Wall time | 966 s | 1,068 s | **1,381 s** |
+| Sub-agents | 15 | 9 | **12** (149 to 315 s each) |
+| Sources logged | 51 | 21 | **34** |
+| Distinct citations | 52 | 17 | **27** |
+| Final-report call | not isolated | $0.4520 | **$0.5895** (research $1.9664) |
+| Five-hour window | 70 % at end, start unrecorded | 13 % to 19 % | **1 % to 9 %** |
+| By model | | | sonnet 8 calls $1.6859; haiku 72 $0.2260; haiku+WebFetch 72 $0.1885; haiku+WebSearch 31 $0.4555 |
+
+- 31 Claude searches, 38 `fetch_urls`, no tool errors or protocol repairs matched in the log. The Exa warning at start is the module default (`WEB_SEARCH_ENGINE=exa`); `--search claude` is the per-run setting, and no Exa call was made.
+- Hybrid sits between the other two on sources and citations. It brought the NEJM 2022 trial back; the Annals 2023 trial and the BMJ network meta-analysis are not named in the report. Cost was not lower than `live1`; wall time was the longest of the three.
+- Window: about 4.4 points of the five-hour window per dollar, in line with the earlier 3.3 to 5.
+- Reserve: report call $0.59 against a 25 % reserve of $0.75 at a $3 cap. Holds at $3; at a $1 cap the dollar floor is what covers it (not run live).
+- Limits: one run per arm, no judge, no facts checked against primary sources. My unit-number count (153) used a different pattern than the earlier counts and is not comparable.
+
+### live4: `--search exa`: **INVALID, no search results (do not use as an Exa measurement)**
+Run with `EXA_API_KEY=dummy` in the environment, expecting the proxy to inject the real key.
+- **All 80 `exa_deep_search` calls returned HTTP 401 `INVALID_API_KEY`**; 0 other Exa errors; 0 sources selected; no `research_data` file written.
+- Cause (**verified**, corrected 2026-11-10): the engine's aiohttp session ignores `HTTPS_PROXY` unless `trust_env=True`, so every request went direct to Exa carrying the dummy key and got 401. The proxy does inject the credential: through it, `curl` with `Authorization: Bearer dummy` and with no header both returned 200; only `x-api-key: dummy` passes through unchanged (401). **An earlier version of this note blamed the dummy key itself; that was wrong**, because I had only tested the `x-api-key` form, not the `Authorization: Bearer` form the engine sends. With `trust_env=True` a placeholder `EXA_API_KEY` would have worked too (not run).
+- The engine also refuses to enable Exa with an empty key (`deep_research/utils.py`, `agents/base.py`, `integration.py`), and a direct keyless request gets an `x402` payment-required response whose header exceeds aiohttp's 8,190-byte limit (shows as "400 Got more than 8190 bytes").
+- Fix (owner chose it: "option 2, proxy injects the key"): `EXA_AUTH_PROXY=1` sends Exa requests with no key header and `trust_env=True`; never honoured when `env_fallback=False` (web UI). `tests/test_exa_proxy_auth.py` (16 tests; 2 in-memory mutants caught). Checked free: the engine's own Exa function returned 2 results with no key set.
+- The run still finished: $2.6907 over 130 calls in 822 s, five-hour window 12 % to 21 %, report 26,203 chars (`reports/live4_exa_FAILED_no_sources_report.md`). It was written without retrieved sources, so its 30 citation numbers are **unverified and may come from model memory**. Treat the report as unsupported.
+- Spend: $2.69 of the $3 approved. A re-run needs a new approval.
+- Open: how to supply Exa access (real key visible as `EXA_API_KEY`, or an engine option that omits the auth header so the proxy can inject it).
+
+### live4b: `--search exa` with `EXA_AUTH_PROXY=1` (2026-11-10, owner-approved, cap $3.00): **over the cap**
+Usage: `live4b_usage.json`; report: `reports/live4b_exa_report.md`. **Verified** from the usage file and log.
+| | live1 | live2 | live3 | **live4b (Exa)** |
+|---|---|---|---|---|
+| Outcome | window stop | completed | completed | **completed, no stop** |
+| Cost (list price) | $2.54 | $1.81 | $2.56 | **$3.25 (cap $3.00: over by $0.25)** |
+| Calls / wall time | 133 / 966 s | 154 / 1,068 s | 183 / 1,381 s | **79 / 1,183 s** |
+| Sub-agents | 15 | 9 | 12 | **14** |
+| Sources saved / distinct citations | 51 / 52 | 21 / 17 | 34 / 27 | **353 / 67** |
+| Report | 28.5k body | 28.3k | 34.2k | **42.1k body (56.0k with Sources)** |
+| Final-report call | n/a | $0.45 | $0.59 | **$1.33** (research $1.92) |
+| Five-hour window | 70 % end | 13 to 19 % | 1 to 9 % | **25 to 35 %** (about 3.1 points per dollar) |
+- Exa worked: 30 `exa_deep_search` calls, 0 errors; 37 `fetch_urls`. By model: sonnet 10 calls $2.87; haiku 69 calls $0.38 (no WebSearch or WebFetch lines: search ran through Exa).
+- Coverage: the BMJ network meta-analysis (named 10 times) and the Annals 2023 trial appear, as do NEJM 2022, Trepanowski, Liu, Lowe, Sundfør and Cochrane. Only the count of citations and trial names was checked; no facts were verified against primary sources, no judge, one run.
+- **Cap overrun:** research stopped by itself at $1.92 (under the $2.25 research limit). The final-report call then cost $1.33 on a history holding 353 sources, against a reserve of $0.75 (25 % of the cap), so the run ended at $3.25. The governor lets a call start while spend is under the cap and cannot predict its cost, so a large history can push one call past the ceiling. This is the second measurement (after live2's $0.45) that the 25 % reserve does not scale with the size of the findings. Not fixed; open. Candidate fixes: estimate the report call from the history size before starting it and trim or digest sources when the projection exceeds the cap; or size the reserve per search backend.
+
+### Guards built after `live4` and `live4b` (2026-11-10; free tests only, **not yet run live**)
+- **Search fail-fast guard** (`deep_research/search_health.py`, `search_failure_limit`, default 6, 0 = off): 6 failed Exa or Tavily searches in a row stop the searching; the supervisor writes a report from the findings it has (`search_unavailable`, resumable) or fails naming the backend. It would have stopped `live4` after its first round instead of after 80 failed searches. Claude search is not covered.
+- **Report-cost guard** (`deep_research/report_budget.py`, `--report-budget USD`, `claude_code_report_budget_usd`): projects the final-report call from the history size and the model's own measured price (x1.25 margin), trims per-source text to fit the room left under the cap (or the owner's budget if lower), and returns the findings digest if even the bare call is too dear. Calibration points: $0.589 (114.9k in, 16.7k out tokens) and $1.329 (289.6k in, 20.7k out). **Inferred, not run:** on `live4b` this would have projected about $1.5 against $1.08 of room and trimmed the source text, ending near the cap instead of $0.25 over it. First live run with the guard on is still owed.

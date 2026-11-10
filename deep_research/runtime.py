@@ -141,6 +141,11 @@ _default_runtime: Optional[RuntimeContext] = None
 _default_runtime_lock = threading.Lock()
 
 
+def active_runtime() -> Optional[RuntimeContext]:
+    """The run installed by ``runtime_scope``, or None outside a run (no default context is created)."""
+    return _runtime_var.get()
+
+
 def get_runtime() -> RuntimeContext:
     """Return the active run context, or the default env-based one."""
     ctx = _runtime_var.get()

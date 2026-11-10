@@ -131,6 +131,13 @@ def api_config(**overrides) -> RunConfig:
 
 
 @pytest.fixture(autouse=True)
+def _no_exa_proxy_switch(monkeypatch):
+    """A session may set EXA_AUTH_PROXY=1 for real runs; tests that count missing keys must not depend on it.
+    tests/test_exa_proxy_auth.py sets it itself where it matters."""
+    monkeypatch.delenv("EXA_AUTH_PROXY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _fast_ui_poll(monkeypatch):
     """Shorten the web UI's progress refresh in tests; the app's own 0.7 s is unchanged."""
     app = sys.modules.get("webui.app")

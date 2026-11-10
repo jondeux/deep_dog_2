@@ -42,6 +42,7 @@ from deep_research.events import EventCollector
 from deep_research.langsmith_tracing import langsmith_scope
 from deep_research.models import Credentials, ModelFactory
 from deep_research.observer import Observer
+from deep_research.secrets import exa_proxy_auth
 from deep_research.run_config import RunConfig
 from deep_research.runtime import RuntimeContext, runtime_scope
 from deep_research.trace import TraceCollector, TraceRecord, redact
@@ -128,7 +129,7 @@ def validate_credentials(config: Optional[RunConfig] = None,
     engine = (cfg.web_search_engine or "").lower()
     if engine in ("tavily", "both") and _missing(["TAVILY_API_KEY"]):
         missing_required.append("TAVILY_API_KEY")
-    if engine in ("exa", "both") and _missing(["EXA_API_KEY"]):
+    if engine in ("exa", "both") and _missing(["EXA_API_KEY"]) and not exa_proxy_auth(creds):
         missing_required.append("EXA_API_KEY")
 
     # ── Enabled-agent platform keys ────────────────────────────────────

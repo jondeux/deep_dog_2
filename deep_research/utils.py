@@ -15,7 +15,8 @@ from tavily import TavilyClient
 
 from deep_research.config import EXA_SEARCH_MAX_CHARS
 from deep_research.observability import log_source
-from deep_research.secrets import env_fallback_allowed, get_secret
+from deep_research.search_health import record_search
+from deep_research.secrets import env_fallback_allowed, exa_proxy_auth, get_secret
 from deep_research.time_utils import get_today_str  # re-export (canonical def lives in time_utils.py)
 
 # ===== UTILITY FUNCTIONS =====
@@ -148,6 +149,7 @@ async def tavily_search_multiple(
         search_start = time.time()
         max_retries = 3
         result = None
+        last_error = ""
         for attempt in range(max_retries):
             try:
                 # Tavily SDK call is sync, so run in a thread and enforce a hard timeout.
@@ -167,6 +169,7 @@ async def tavily_search_multiple(
                 )
                 break
             except asyncio.TimeoutError:
+                last_error = f"timed out after {TAVILY_TIMEOUT:.0f}s"
                 if attempt < max_retries - 1:
                     backoff = 2 * (attempt + 1)
                     logger.warning(
@@ -181,6 +184,7 @@ async def tavily_search_multiple(
                         f"across {max_retries} attempts"
                     )
             except Exception as e:
+                last_error = f"{type(e).__name__}: {e}"
                 if attempt < max_retries - 1:
                     backoff = 2 * (attempt + 1)
                     logger.warning(
@@ -197,8 +201,10 @@ async def tavily_search_multiple(
 
         if result is None:
             # Return empty result to avoid breaking the pipeline.
+            record_search("Tavily", False, last_error)
             search_docs.append({'results': []})
         else:
+            record_search("Tavily", True)
             search_elapsed = time.time() - search_start
             logger.debug(f"Tavily search for '{query}' completed in {search_elapsed:.2f}s")
             search_docs.append(result)
@@ -240,16 +246,18 @@ async def _exa_search_multiple(search_queries: List[str], max_results: int = 10)
     import os
 
     api_key = get_secret("EXA_API_KEY")
-    if not api_key:
+    if not api_key and not exa_proxy_auth():
         raise ValueError("EXA_API_KEY not found in environment variables.")
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    via_proxy = exa_proxy_auth()      # EXA_AUTH_PROXY=1: a proxy adds the credential (replacing any placeholder key)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     responses = []
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=EXA_TIMEOUT)) as session:
+    # aiohttp ignores HTTPS_PROXY unless trust_env is set; a direct request would reach Exa with no key at all.
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=EXA_TIMEOUT),
+                                     trust_env=via_proxy) as session:
         for query in search_queries:
             payload = {
                 "query": query,
@@ -265,14 +273,17 @@ async def _exa_search_multiple(search_queries: List[str], max_results: int = 10)
                     if response.status != 200:
                         error_text = await response.text()
                         logger.warning(f"Exa search error {response.status} for '{query}': {error_text}")
+                        record_search("Exa", False, f"HTTP {response.status} {error_text}")
                         responses.append({"results": []})
                         continue
                     data = await response.json()
+                    record_search("Exa", True)
                     raw_results = data.get("results", []) if isinstance(data, dict) else []
                     normalized = [_normalize_search_item(item, provider="exa") for item in raw_results]
                     responses.append({"results": [r for r in normalized if r.get("url")]})
             except Exception as e:
                 logger.warning(f"Exa search failed for '{query}': {e}")
+                record_search("Exa", False, f"{type(e).__name__}: {e}")
                 responses.append({"results": []})
 
     return responses

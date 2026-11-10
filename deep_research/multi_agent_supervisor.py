@@ -42,6 +42,8 @@ from deep_research.citation_utils import remap_codes, build_final_registry, fina
 from deep_research.agents.shared.tools import think_tool
 from deep_research.config import looks_like_refusal
 from deep_research.runtime import get_runtime
+from deep_research.report_budget import CHARS_PER_TOKEN, OUTPUT_TOKENS, plan_report, trim_text
+from deep_research.search_health import SearchBackendUnavailable, search_unavailable
 from deep_research.secrets import scrub_secrets
 from deep_research.cancellation import RunCancelledError
 from deep_research import events as _events
@@ -201,6 +203,8 @@ _STOP_TEXT = {
     "usd_cap": "the cost cap was reached",
     "plan_window_guard": "the plan-window guard was reached",
     "plan_limit_reached": "the plan's own usage limit was reached",
+    "search_unavailable": "the search backend kept failing",
+    "report_budget": "the final report would cost more than its budget",
 }
 
 
@@ -231,6 +235,21 @@ def _emit_usage() -> None:
     if snap:
         _emit(_events.USAGE_UPDATED, phase="run", agent="governor",
               **{k: snap.get(k) for k in ("calls", "est_cost_usd", "util", "util_first", "stopped", "stop_phase", "limits")})
+
+
+def _report_cost_estimator(models, model_id):
+    """The cost projector for the final-report call, or None when this run has no cost data (non-claudecode runs)."""
+    make = getattr(models, "report_cost_estimator", None)
+    return make(model_id) if callable(make) else None
+
+
+def _message_chars(msgs) -> tuple:
+    """(content, reasoning, tool-argument) character counts of a list of messages: the size the model is sent."""
+    content = sum(len(extract_text_from_response(m.content)) for m in msgs)
+    reasoning = sum(len(m.additional_kwargs.get("reasoning_content") or "") for m in msgs)
+    tools = sum(len(json.dumps(m.tool_calls, ensure_ascii=False, default=str))
+                for m in msgs if getattr(m, "tool_calls", None))
+    return content, reasoning, tools
 
 
 def _digest_report(state: dict, final_registry: list, reason: str) -> str:
@@ -410,6 +429,19 @@ async def supervisor(state: SupervisorState) -> Command[Literal["supervisor_tool
     elapsed_minutes = 0.0
     if start_time > 0:
         elapsed_minutes = (time.time() - start_time) / 60.0
+
+    # Fail-fast guard: the search backend kept failing. Do not spend another supervisor turn on it.
+    unavailable = search_unavailable()
+    if unavailable:
+        if _has_research_findings(state, [], []):
+            logger.warning("Search backend unavailable — writing the final report from the findings so far: %s",
+                           unavailable)
+            print(f"\n{Colors.YELLOW}[Search unavailable] {unavailable} Writing the final report from the "
+                  f"findings gathered so far.{Colors.RESET}", flush=True)
+            return Command(goto="write_final_report",
+                           update={"stopped_early": "search_unavailable",
+                                   "stop_elapsed_minutes": round(elapsed_minutes, 3)})
+        raise SearchBackendUnavailable(unavailable)
 
     system_message = _build_supervisor_system_message(state)
 
@@ -986,28 +1018,31 @@ async def write_final_report(state: SupervisorState) -> dict:
         registry_lines.append(line)
     registry_block = "\n".join(registry_lines) if registry_lines else "(no sources available)"
 
-    full_text_parts = []
-    for entry in final_registry:
-        full_text = (entry.get("full_text") or "").strip()
-        if not full_text:
-            continue
-        full_text_parts.append(
-            f"[{entry.get('code')}] {entry.get('title') or 'Untitled'} ({entry.get('url') or ''})\n{full_text}"
-        )
-    curated_full_text = (
-        "\n\n---\n\n".join(full_text_parts)
-        if full_text_parts
-        else "(No additional source text — the sources are already covered in the research findings above.)"
-    )
+    source_texts = [(entry, (entry.get("full_text") or "").strip()) for entry in final_registry]
+    source_texts = [(entry, text) for entry, text in source_texts if text]
+
+    def curated_block(limit=None):
+        """The sources' full text for the write instruction; ``limit`` keeps only that many characters of each."""
+        parts = []
+        for entry, text in source_texts:
+            kept = text if limit is None else trim_text(text, limit)
+            if kept:
+                parts.append(f"[{entry.get('code')}] {entry.get('title') or 'Untitled'} ({entry.get('url') or ''})\n{kept}")
+        return ("\n\n---\n\n".join(parts) if parts
+                else "(No additional source text — the sources are already covered in the research findings above.)")
 
     system_message = _build_supervisor_system_message(state)
     final_report_write_prompt = runtime.prompts.get("final_report_write_prompt", "")
-    write_instruction = final_report_write_prompt.format(
-        source_registry_block=registry_block,
-        curated_full_text=curated_full_text,
-        target_language=state.get("target_language") or cfg.target_language_fallback,
-        date=get_today_str(),
-    )
+
+    def build_instruction(curated_text):
+        return final_report_write_prompt.format(
+            source_registry_block=registry_block,
+            curated_full_text=curated_text,
+            target_language=state.get("target_language") or cfg.target_language_fallback,
+            date=get_today_str(),
+        )
+
+    write_instruction = build_instruction(curated_block())
 
     # The supervisor's trailing decision message (e.g. ResearchComplete, or a
     # tool call that never got a tool result) is an AIMessage
@@ -1028,14 +1063,29 @@ async def write_final_report(state: SupervisorState) -> dict:
         runtime.observer.emit_trace(
             kind, phase="report", agent="final_report_writer", **details)
 
+    # Report-cost guard: project this call's cost and keep it inside its budget (see report_budget.py).
+    estimator = _report_cost_estimator(runtime.models, getattr(_final_report_writer_model(), "model_id", None))
+    over_budget = False
+    if estimator is not None and estimator.budget_usd() is not None:
+        fixed_chars = sum(_message_chars([SystemMessage(content=system_message)] + history)) \
+            + len(build_instruction(curated_block(0)))
+        plan = plan_report(estimator.budget_usd(), estimator.project, fixed_chars,
+                           [len(text) for _, text in source_texts])
+        estimator.record(plan.to_dict())
+        diagnostic("final_writer_budget",
+                   f"Report budget ${plan.budget_usd:.2f}: projected ${plan.projected_usd:.2f} -> {plan.action}"
+                   + (f" (source text {plan.source_chars_before:,} -> {plan.source_chars_after:,} chars)"
+                      if plan.action == "trimmed" else ""),
+                   **plan.to_dict())
+        if plan.action == "trimmed":
+            messages[-1] = HumanMessage(content=build_instruction(curated_block(plan.text_limit)))
+        elif plan.action == "digest":
+            over_budget = True
+
     async def invoke_writer(request_messages, attempt):
         # Character counts, not token estimates or exact HTTP payload sizes.
         # Include prior reasoning and tool arguments as well as message text.
-        content_chars = sum(len(extract_text_from_response(m.content)) for m in request_messages)
-        reasoning_chars = sum(len(m.additional_kwargs.get("reasoning_content") or "")
-                              for m in request_messages)
-        tool_chars = sum(len(json.dumps(m.tool_calls, ensure_ascii=False, default=str))
-                         for m in request_messages if getattr(m, "tool_calls", None))
+        content_chars, reasoning_chars, tool_chars = _message_chars(request_messages)
         input_chars = content_chars + reasoning_chars + tool_chars
         diagnostic(
             "final_writer_input",
@@ -1077,6 +1127,17 @@ async def write_final_report(state: SupervisorState) -> dict:
     request_messages = messages
     for attempt in (1, 2):
         runtime.check_cancelled()
+        if not over_budget and attempt == 2 and estimator is not None and estimator.budget_usd() is not None:
+            c, r, t = _message_chars(request_messages)        # a retry is a second call: is there still room for it?
+            over_budget = estimator.project((c + r + t) / CHARS_PER_TOKEN, OUTPUT_TOKENS) > estimator.budget_usd()
+        if over_budget:
+            stopped = stopped or "report_budget"        # keep the stop that ended research; it is the root cause
+            digest = True
+            final_report = _digest_report(state, final_registry, stopped)
+            diagnostic("final_writer_digest", "The final report would cost more than its budget; "
+                       "returning the findings digest (raise --report-budget or --usd-cap and --resume)",
+                       reason=stopped, chars=len(final_report))
+            break
         try:
             raw_report = await invoke_writer(request_messages, attempt)
         except Exception as e:  # noqa: BLE001

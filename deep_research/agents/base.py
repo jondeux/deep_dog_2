@@ -38,7 +38,7 @@ from deep_research.utils import extract_text_from_response
 from deep_research.console_logger import Colors
 from deep_research.observability import log_source
 from deep_research.runtime import get_runtime
-from deep_research.secrets import get_secret
+from deep_research.secrets import exa_proxy_auth, get_secret
 from deep_research.trace import serialize_message
 from deep_research import events as _events
 from deep_research.platform_prompts import (
@@ -145,7 +145,7 @@ if WEB_SEARCH_ENGINE in ("tavily", "both"):
     else:
         _warned.append("TAVILY_API_KEY")
 if WEB_SEARCH_ENGINE in ("exa", "both"):
-    if get_secret("EXA_API_KEY"):
+    if get_secret("EXA_API_KEY") or exa_proxy_auth():
         _web_search_tools.append(exa_deep_search)
     else:
         _warned.append("EXA_API_KEY")
@@ -224,7 +224,7 @@ def _search_tools_for(config, credentials):
     tools = []
     if engine in ("tavily", "both") and rt.credentials.has("TAVILY_API_KEY"):
         tools.append(tavily_search)
-    if engine in ("exa", "both") and rt.credentials.has("EXA_API_KEY"):
+    if engine in ("exa", "both") and (rt.credentials.has("EXA_API_KEY") or exa_proxy_auth(credentials)):
         tools.append(exa_deep_search)
     if engine == "claude":
         tools.append(claude_web_search)     # Claude's own WebSearch on the owner's plan: no search API key

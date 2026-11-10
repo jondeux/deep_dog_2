@@ -7,6 +7,7 @@ Controlled through DEEPDOG_CC_FAKE_* variables (the child allowlist passes the D
 A response: {"text", "cost", "util": {"five_hour", "seven_day"}, "is_error", "subtype", "api_error_status",
              "delay", "hooks", "no_result", "exit"}. Event shapes follow recorded real runs
 (swarm-framework validation/fixtures/v1-stream.jsonl)."""
+import fcntl
 import json
 import os
 import sys
@@ -25,8 +26,10 @@ def main(argv):
     prompt = sys.stdin.read()
     script = json.load(open(E("DEEPDOG_CC_FAKE_SCRIPT")))
     state = E("DEEPDOG_CC_FAKE_STATE")
-    n = int(open(state).read() or 0) if os.path.exists(state) else 0
-    open(state, "w").write(str(n + 1))
+    with open(state + ".lock", "w") as lock:       # concurrent calls (parallel page reads) must each get their own index
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        n = int(open(state).read() or 0) if os.path.exists(state) else 0
+        open(state, "w").write(str(n + 1))
     r = script[min(n, len(script) - 1)]
     t0 = time.time()
     with open(E("DEEPDOG_CC_FAKE_LOG"), "a") as f:

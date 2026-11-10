@@ -378,6 +378,10 @@ Examples:
     picker.add_argument("--usd-cap", type=float, default=None,
                         help="list-price cap in USD for the whole run (default 5.0). Research stops at 75%% of it, "
                              "the rest is kept for writing the final report")
+    picker.add_argument("--report-budget", type=float, default=None, metavar="USD",
+                        help="most the final-report call may cost, in USD (default: whatever is left under --usd-cap). "
+                             "The engine projects the call's cost first: over budget it shortens the per-source text, and if "
+                             "even that is too dear it returns the findings digest, which --resume can finish with a higher budget")
     picker.add_argument("--plan-window-max", type=float, default=None,
                         help="never exceed this share of the plan window, 0 to 1 (default 0.8). Research stops "
                              "0.1 below it, the rest is kept for the final report")
@@ -404,7 +408,7 @@ Examples:
             parser.error(str(e))
         if args.preset or any(getattr(args, f"{r}_{k}") for r in ("supervisor", "draft", "subagent")
                               for k in ("model", "effort")) or args.search != "claude":
-            parser.error("--resume keeps the saved models and search; only --usd-cap and --plan-window-max may change")
+            parser.error("--resume keeps the saved models and search; only --usd-cap, --report-budget and --plan-window-max may change")
 
     picked = None
     wants_picker = args.preset or any(getattr(args, f"{r}_{k}") for r in ("supervisor", "draft", "subagent")
@@ -424,11 +428,13 @@ Examples:
             parser.error(str(e))
         print("Models: " + model_picker.describe(args.preset or model_picker.DEFAULT_PRESET, **overrides))
         caps = {k: v for k, v in (("claude_code_usd_cap", args.usd_cap),
+                                  ("claude_code_report_budget_usd", args.report_budget),
                                   ("claude_code_plan_window_max", args.plan_window_max)) if v is not None}
         if caps:
             if (args.usd_cap is not None and args.usd_cap <= 0) or (
+                    args.report_budget is not None and args.report_budget <= 0) or (
                     args.plan_window_max is not None and not 0.1 <= args.plan_window_max <= 1):
-                parser.error("--usd-cap must be above 0 and --plan-window-max between 0.1 and 1")
+                parser.error("--usd-cap and --report-budget must be above 0 and --plan-window-max between 0.1 and 1")
             from dataclasses import replace
             picked = replace(picked, **caps)
         if args.no_page_reader:
@@ -439,19 +445,22 @@ Examples:
                 parser.error("--page-reads must be 0 or more")
             from dataclasses import replace
             picked = replace(picked, claude_page_reads_per_agent=args.page_reads)
-    elif args.resume and (args.usd_cap is not None or args.plan_window_max is not None):
+    elif args.resume and (args.usd_cap is not None or args.plan_window_max is not None
+                          or args.report_budget is not None):
         # A resumed segment gets a fresh cap; the window guard still reads the real plan window.
         if (args.usd_cap is not None and args.usd_cap <= 0) or (
+                args.report_budget is not None and args.report_budget <= 0) or (
                 args.plan_window_max is not None and not 0.1 <= args.plan_window_max <= 1):
-            parser.error("--usd-cap must be above 0 and --plan-window-max between 0.1 and 1")
+            parser.error("--usd-cap and --report-budget must be above 0 and --plan-window-max between 0.1 and 1")
         from dataclasses import replace
         from deep_research.resume import config_from_snapshot
         picked = replace(config_from_snapshot(snapshot), **{k: v for k, v in (
-            ("claude_code_usd_cap", args.usd_cap), ("claude_code_plan_window_max", args.plan_window_max))
+            ("claude_code_usd_cap", args.usd_cap), ("claude_code_report_budget_usd", args.report_budget),
+            ("claude_code_plan_window_max", args.plan_window_max))
             if v is not None})
-    elif args.usd_cap is not None or args.plan_window_max is not None or args.no_page_reader \
-            or args.page_reads is not None:
-        parser.error("--usd-cap, --plan-window-max, --no-page-reader and --page-reads apply to Claude-plan runs: add --preset or a model flag")
+    elif args.usd_cap is not None or args.plan_window_max is not None or args.report_budget is not None \
+            or args.no_page_reader or args.page_reads is not None:
+        parser.error("--usd-cap, --report-budget, --plan-window-max, --no-page-reader and --page-reads apply to Claude-plan runs: add --preset or a model flag")
 
     if snapshot is not None:
         prompt = None

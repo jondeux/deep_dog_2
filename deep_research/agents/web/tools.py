@@ -4,6 +4,7 @@ import logging
 from typing_extensions import Annotated, Literal, Optional
 from langchain_core.tools import tool, InjectedToolArg
 
+from deep_research.search_health import UNAVAILABLE_TOOL_TEXT, search_unavailable
 from deep_research.utils import (
     tavily_search_multiple,
     deduplicate_search_results,
@@ -65,6 +66,8 @@ async def tavily_search(
         days: Limit results to the last N days. Use this for time-sensitive queries or market data.
     """
     import time
+    if search_unavailable():
+        return UNAVAILABLE_TOOL_TEXT          # the fail-fast guard tripped: no more network calls this run
     search_start = time.time()
     max_results = min(max(max_results, 1), 20)
 
@@ -110,6 +113,8 @@ async def exa_deep_search(
     """
     import time
 
+    if search_unavailable():
+        return UNAVAILABLE_TOOL_TEXT          # the fail-fast guard tripped: no more network calls this run
     start_time = time.time()
     max_results = min(max(max_results, 1), 20)
     logger.info(f"Exa deep search: '{query}'")

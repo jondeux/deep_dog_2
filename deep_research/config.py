@@ -250,7 +250,7 @@ Examples of model names accepted by get_model():
 #   DEEPINFRA_API_KEY                    DeepInfra ("deepinfra:<model>")
 #   TOGETHER_API_KEY                     Together AI ("together:<model>")
 #   FIREWORKS_API_KEY                    Fireworks AI ("fireworks:<model>")
-#   EXA_API_KEY                          Exa search
+#   EXA_API_KEY                          Exa search (or EXA_AUTH_PROXY=1: no key header, a proxy injects it; CLI only)
 #   PERPLEXITY_KEY                       Substack/Perplexity search
 #   PUBMED_EMAIL                         PubMed E-utilities contact
 #   SEC_EDGAR_CONTACT_EMAIL              SEC EDGAR contact

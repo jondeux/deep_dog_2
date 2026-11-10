@@ -98,8 +98,15 @@ class ModelFactory:
                 plan_window_max=c.claude_code_plan_window_max, usd_cap=c.claude_code_usd_cap,
                 max_concurrent=c.claude_code_max_concurrent, timeout_s=c.claude_code_timeout_seconds,
                 report_reserve=c.claude_code_report_reserve, window_reserve=c.claude_code_window_reserve,
-                report_reserve_floor_usd=c.claude_code_report_reserve_floor_usd)
+                report_reserve_floor_usd=c.claude_code_report_reserve_floor_usd,
+                report_budget_usd=c.claude_code_report_budget_usd)
         return self._governor
+
+    def report_cost_estimator(self, model_id=None):
+        """Projects the final-report call's cost against its budget; None when no ``claudecode:`` model ran."""
+        if self._governor is None:
+            return None
+        return self._governor.report_estimator(model_id)
 
     def usage(self) -> Optional[dict]:
         """Cost, plan-window use and per-model breakdown for this run, or ``None`` when no ``claudecode:``

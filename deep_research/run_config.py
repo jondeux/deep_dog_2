@@ -89,6 +89,10 @@ class RunConfig:
     draft_report_reasoning_effort: str = _cfg.DRAFT_REPORT_REASONING_EFFORT
     thinking_mode: str = _cfg.THINKING_MODE   # "auto" | "on" | "off"
 
+    # Fail-fast guard: stop the run after this many search failures in a row (HTTP or transport errors, not empty
+    # results). 0 turns it off. See deep_research/search_health.py.
+    search_failure_limit: int = 6
+
     # ── Claude subscription provider ("claudecode:<model>[@<effort>]") ─
     # Caps for runs whose models go through the owner's own `claude` CLI sign-in. The plan-window guard
     # stops BEFORE the window is exhausted; the USD figure is the list-price estimate the binary reports.
@@ -101,6 +105,10 @@ class RunConfig:
     claude_code_window_reserve: float = 0.10
     # ...and at least this many dollars (the final-report call cost $0.45 in a measured run); never more than 60% of the cap.
     claude_code_report_reserve_floor_usd: float = 0.5
+    # The most the final-report call may cost, in USD (CLI: --report-budget). None: whatever is left under the cap.
+    # Before the call the engine projects its cost; over budget, per-source text is trimmed, and if even the bare call
+    # is too dear the findings digest is returned (stop reason "report_budget"; --resume with a higher budget).
+    claude_code_report_budget_usd: Optional[float] = None
     # Search backend for web_search_engine="claude": Claude's own WebSearch tool, run by this model.
     claude_search_model: str = "claudecode:haiku-5.5@low"
     # With web_search_engine="claude", fetch_urls reads the real page through Claude's WebFetch (False: the search summary is served, as before).

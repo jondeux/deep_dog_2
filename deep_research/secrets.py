@@ -44,6 +44,19 @@ def get_secret(env_name: str) -> Optional[str]:
     return os.getenv(env_name)
 
 
+def exa_proxy_auth(credentials=None) -> bool:
+    """True when Exa requests should carry NO key header because a proxy injects the credential.
+
+    Opt-in with ``EXA_AUTH_PROXY=1`` in the process environment (CLI / library runs). A run that must not use
+    the process environment (``env_fallback=False``, the public web UI) never gets it, so a visitor's run cannot
+    ride on a credential the operator's network adds. ``credentials`` defaults to the active run's.
+    """
+    creds = credentials if credentials is not None else _active_credentials()
+    if getattr(creds, "env_fallback", True) is False:
+        return False
+    return os.environ.get("EXA_AUTH_PROXY", "").strip().lower() in ("1", "true", "yes")
+
+
 def scrub_secrets(text) -> str:
     """``text`` with every secret held by the active run replaced by ``***``.
 

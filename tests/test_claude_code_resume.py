@@ -204,7 +204,11 @@ SCRIPT = [
 ]
 
 
-def test_cli_saves_a_resume_file_when_a_cap_stops_the_run_and_resumes_from_it(tmp_path, capsys, fake_claude):
+def test_cli_saves_a_resume_file_when_a_cap_stops_the_run_and_resumes_from_it(tmp_path, capsys, fake_claude, monkeypatch):
+    # This test is about resume. Its half-cent cap is far below any real report call ($0.13 to $1.33 measured), so the
+    # report-cost guard would rightly return the digest; switch the guard off here (tests/test_report_budget.py covers it).
+    import deep_research.multi_agent_supervisor as sup
+    monkeypatch.setattr(sup, "_report_cost_estimator", lambda models, model_id: None)
     rr = load_cli()
     mem = tmp_path / "deep-research-memory"
     fake_claude.script(SCRIPT)

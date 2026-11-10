@@ -1,0 +1,52 @@
+{
+  "thread_id": "live4",
+  "status": "completed",
+  "stopped_early": null,
+  "usage": {
+    "calls": 130,
+    "est_cost_usd": 2.690743,
+    "util": {
+      "five_hour": 0.21,
+      "seven_day": 0.26
+    },
+    "util_first": {
+      "five_hour": 0.12,
+      "seven_day": 0.25
+    },
+    "stopped": null,
+    "stop_phase": null,
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "calls": 13,
+        "cost": 2.520556,
+        "input_tokens": 599878,
+        "output_tokens": 53478
+      },
+      "claude-haiku-5-5": {
+        "calls": 117,
+        "cost": 0.170178,
+        "input_tokens": 711590,
+        "output_tokens": 145608
+      }
+    },
+    "by_phase": {
+      "research": {
+        "calls": 129,
+        "cost": 2.256202
+      },
+      "report": {
+        "calls": 1,
+        "cost": 0.43453
+      }
+    },
+    "limits": {
+      "usd_cap": 3.0,
+      "usd_research_limit": 2.25,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    }
+  },
+  "elapsed_seconds": 821.77,
+  "report_file": "outputs/research_2026-11-10_15-15-38_vye.md"
+}
