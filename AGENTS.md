@@ -12,7 +12,8 @@ Python 3.11+ multi-agent research engine (LangGraph) that turns a question into 
 - Measure project state: `bash scripts/state_snapshot.sh` (runs the full suite, read-only; paste the result into `claude/project-state.md`)
 - Run a research job: `python run_research.py --prompt "..."` (needs `.env`, see `.env.example`)
 - Run on the Claude plan (no provider keys): `python run_research.py --prompt "..." --preset economy` (also `benchmark`, `custom`, `testing-framework`; `--list-presets`; `--search claude|exa|tavily|both`)
-- Claude-plan run controls: `--supervisor-model/--supervisor-effort` (same for `--draft-`, `--subagent-`), `--usd-cap`, `--plan-window-max`, `--no-page-reader`, `--page-reads N`. The run prints its usage and writes `usage_<ts>.json`.
+- Claude-plan run controls: `--supervisor-model/--supervisor-effort` (same for `--draft-`, `--subagent-`), `--usd-cap`, `--report-budget USD`, `--static-reserve`, `--plan-window-max`, `--no-page-reader`, `--page-reads N`. The run prints its usage and writes `usage_<ts>.json`.
+- `search_failure_limit` (`RunConfig`, default 6, 0 = off) stops a run whose Exa or Tavily searches keep failing.
 - Continue a run a usage cap stopped: `python run_research.py --resume <id>` (state in `deep-research-memory/`, see `claude/memory/deep-research-memory.md`).
 - Run the web UI: `python webui/app.py` (127.0.0.1:7860; honours `GRADIO_SERVER_NAME` / `GRADIO_SERVER_PORT`)
 - Build the Space bundle: `bash webui/build_space.sh <empty-dir> gradio`
@@ -60,7 +61,10 @@ No linter or type checker is configured; do not add one unasked.
 - LangSmith endpoints come only from the fixed US/EU map, never free text.
 - `claudecode:` models (hard rule) run the unmodified `claude` CLI on the OWNER's own plan: personal use only. The web UI must keep refusing them. Never use `--bare`, never read, store or forward the sign-in, never pass provider keys to children (`DEEPDOG_ENV_PASS` is the owner's own opt-in).
 - No live `claude -p` call or pilot without the owner's spend approval; probes use haiku-5.5 and a hard cap (`claude_code_usd_cap`, plan-window guard `claude_code_plan_window_max`).
-- Those two are ceilings. Research stops earlier (`claude_code_report_reserve`, `claude_code_window_reserve`) so the final report can still be written.
+- Those two are ceilings, but calls already running finish, so neither is a hard bound (`live6t` ended $0.097 over a $1 cap).
+- Research stops earlier so the final report can still be written: by default when spend + next round + the projected cheapest report reaches the cap (`claude_code_dynamic_reserve`; `--static-reserve` uses `claude_code_report_reserve` instead).
+- The window guard stops research 0.1 below it (`claude_code_window_reserve`).
+- The report call is projected before it is made and trimmed to its budget, or replaced by the digest.
 - Ask before: dependency upgrades, changing the Space SDK or Python version (`sdk_version: 6.30.0`, `python_version: "3.11"`), public `run_research()` API changes.
 
 ## Git and PRs
