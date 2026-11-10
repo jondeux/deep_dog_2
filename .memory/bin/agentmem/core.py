@@ -111,6 +111,7 @@ def file_lock(path, timeout=10.0):
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS memories(
   id TEXT PRIMARY KEY, kind TEXT, key TEXT, text TEXT, tier TEXT, tier_rank INT,
   user TEXT, agent TEXT, project TEXT, session TEXT,
@@ -245,11 +246,35 @@ class Store:
             self._db.row_factory = sqlite3.Row
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(SCHEMA)
+            self._ensure_fresh()
         return self._db
+
+    MEM_LOG = os.path.join("log", "memories.jsonl")
+
+    def _log_size(self):
+        try:
+            return os.path.getsize(self.p(self.MEM_LOG))
+        except OSError:
+            return 0
+
+    def _stamp(self):
+        row = self._db.execute("SELECT v FROM meta WHERE k='mem_log'").fetchone()
+        return row[0] if row else None
+
+    def _set_stamp(self, size):
+        self._db.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('mem_log', ?)", (str(size),))
+
+    def _ensure_fresh(self):
+        """index.db is git-ignored, so a fresh clone has none (or one built from this session's captures only), while the
+        committed memories.jsonl is the source of truth. Rebuild when the log is not the one the index last applied
+        (deep_dog_2 field audit, 2026-11-10: wake rendered 3 of 20 committed rules and rewrote MEMORY.md without the rest)."""
+        if os.path.isdir(self.p("log")) and self._stamp() != str(self._log_size()):
+            self.reindex()
 
     def reindex(self):
         """Rebuild memories + raw tables from JSONL (source of truth). KB/code graph are rebuilt by ingest."""
         db = self.db
+        size = self._log_size()  # read first: an event appended meanwhile leaves the stamp behind, so the next open rebuilds
         for t in ("memories", "memories_fts", "raw", "raw_fts", "entities", "mentions"):
             db.execute(f"DELETE FROM {t}")
         for rel in self.raw_files():
@@ -257,6 +282,7 @@ class Store:
                 self._index_raw(r)
         for ev in self.read_jsonl(os.path.join("log", "memories.jsonl")):
             self._apply_event(ev)
+        self._set_stamp(size)
         db.commit()
 
     # ---------- raw capture (F2) ----------
@@ -295,10 +321,17 @@ class Store:
     # ---------- curated memory events (F1, F5, F6) ----------
     def emit(self, ev):
         ev.setdefault("ts", now())
+        fresh = self._stamp_current()
         self.append(os.path.join("log", "memories.jsonl"), ev)
         self._apply_event(ev)
+        if fresh:
+            self._set_stamp(self._log_size())
         self.db.commit()
         return ev
+
+    def _stamp_current(self):
+        self.db  # opening rebuilds a stale index first
+        return self._stamp() == str(self._log_size())
 
     def _apply_event(self, ev):
         db, op = self.db, ev["op"]

@@ -71,7 +71,7 @@ def init(store, wire=False, hooks=None):
     gi = ".gitignore"
     if os.path.isdir(".git") or os.path.exists(gi):
         cur = open(gi).read() if os.path.exists(gi) else ""
-        add = [l for l in (".memory/index.db*", ".memory/scratch/", ".memory/log/raw-*.jsonl", ".memory/**/*.lock", ".memory/bin/**/__pycache__/") if l not in cur]
+        add = [l for l in (".memory/index.db*", ".memory/scratch/", ".memory/log/raw-*.jsonl", ".memory/log/state.json", ".memory/**/*.lock", ".memory/bin/**/__pycache__/") if l not in cur]
         if add:
             open(gi, "a").write(("\n" if cur and not cur.endswith("\n") else "") + "\n".join(add) + "\n")
             done.append("gitignore updated (raw transcripts and index stay local)")
@@ -254,10 +254,10 @@ def wake(store, hook=False):
         add("## Skills (open the file only when the task matches)")
         for n, d in sk:
             add(f"- {n}: {d} -> .memory/skills/{n}.md")
-    status = []
+    status, local = [], []  # `local` depends on this container's uncommitted raw logs, so it never goes into the file on disk
     pr = pending_raw(store)
     if pr:
-        status.append(f"{pr} captured events not yet extracted -> run `mem extract` and answer it (takes a minute)")
+        local.append(f"{pr} captured events not yet extracted -> run `mem extract` and answer it (takes a minute)")
     cf = conflicts(store)
     if cf:
         status.append(f"CONFLICTS (ask the user): {', '.join(list(cf)[:5])}")
@@ -265,13 +265,24 @@ def wake(store, hook=False):
     if props:
         status.append(f"skill proposals awaiting user approval: {', '.join(n for n, _ in props)}")
     if W.skills_packet(store):
-        status.append("enough successful cases for a new skill -> `mem skills packet`")
-    if status:
-        out.append("## Status")
-        out += [f"- {s}" for s in status]
-    out.append("- Everything else: `mem recall \"<query>\"` just before acting (budgeted, hybrid search).")
-    text = "\n".join(out) + "\n"
-    open(store.p("MEMORY.md"), "w", encoding="utf-8").write(text)
+        local.append("enough successful cases for a new skill -> `mem skills packet`")
+
+    def render(lines):
+        body = list(out)
+        if lines:
+            body.append("## Status")
+            body += [f"- {x}" for x in lines]
+        body.append("- Everything else: `mem recall \"<query>\"` just before acting (budgeted, hybrid search).")
+        return "\n".join(body) + "\n"
+    text = render(status + local)
+    on_disk = render(status)
+    path = store.p("MEMORY.md")
+    try:
+        same = open(path, encoding="utf-8").read() == on_disk
+    except OSError:
+        same = False
+    if not same:  # MEMORY.md is committed in many repos: it holds only what the committed logs say, so a fresh clone and the
+        open(path, "w", encoding="utf-8").write(on_disk)  # container that committed it agree (deep_dog_2 audit F1/F7)
     return text
 
 
@@ -325,6 +336,15 @@ def doctor(store):
     pr = pending_raw(store)
     if pr:
         issues.append(f"{pr} raw events pending extraction")
+    bad = []  # trusted memories that came from harness text (hook feedback), stored before capture skipped it
+    for m in store.db.execute("SELECT id, key, text, quote, source_ids FROM memories WHERE tier='user' AND forgotten=0 AND valid_to IS NULL"):
+        srcs = [x for x in (m["source_ids"] or "").replace("[", "").replace("]", "").replace('"', "").split(",") if x.strip()]
+        raws = [r["text"] for r in store.db.execute(f"SELECT text FROM raw WHERE id IN ({','.join('?' * len(srcs))})", srcs)] if srcs else []
+        if W.is_harness_text(m["text"]) or W.is_harness_text(m["quote"]) or any(W.is_harness_text(t) for t in raws):
+            bad.append(m["id"])
+    if bad:
+        issues.append(f"{len(bad)} user-tier memories came from hook feedback, not the user: "
+                      + "; ".join(f"`mem forget {i} --reason harness-text`" for i in bad[:5]) + (" ..." if len(bad) > 5 else ""))
     for k, ids in conflicts(store).items():
         issues.append(f"conflict on key '{k}': {ids}")
     stale = 0

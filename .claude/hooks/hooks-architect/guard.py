@@ -44,6 +44,11 @@ DUMP_PATTERNS = [
     re.compile(r"\bENV\.(to_h|to_a|each|inspect|keys|values)\b|\b(p|puts|pp)\s+ENV\b(?!\[)"),
     re.compile(r"%ENV\b|\bgetenv\(\s*\)|\$_ENV\b(?!\[)|\bDeno\.env\.toObject\b"),
 ]
+# A named read of an environment variable in inline code: os.environ['X'], os.environ.get('X'), os.getenv('X'), process.env.X,
+# ENV['X'], $_ENV['X'], Deno.env.get('X'). Only a secret-looking name is denied (deep_dog_2 field audit F4, 2026-11-10).
+ENV_NAME_READS = re.compile(
+    r"""(?:os\.environ(?:\.get)?\s*[\[(]\s*|os\.getenv\s*\(\s*|\bENV\s*(?:\[|\.fetch\()\s*|\$_ENV\s*\[\s*|\bgetenv\s*\(\s*"""
+    r"""|Deno\.env\.get\s*\(\s*|process\.env\s*\[\s*)["']([A-Za-z_]\w*)["']|process\.env\.([A-Za-z_]\w*)""")
 GLOB_WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.~$/@{}+-*?[]")
 PATHISH = re.compile(r"[\w.~$/@{}+-]*[./~][\w.~$/@{}+-]*")
 
@@ -97,6 +102,16 @@ def check_path(ctx: Ctx, raw: str, op: str) -> None:
         if hit:
             ctx.add("deny", f"{raw} matches zero-access pattern {hit!r} (secrets). Use a committed template such as .env.example.")
             return
+    if glob_word and not allowed:
+        # the glob names no such file today, but would name a protected basename if it existed (`cat .env*` where only
+        # .env.example is there): deny, like the shell would hand the file over the moment it exists
+        base = os.path.basename(raw)
+        # `*` or `c*` could name credentials.json, but nobody means that: ask for three literal characters before it counts
+        for pat in (ctx.lst("zero_access") if len(re.sub(r"[*?\[\]]", "", base)) >= 3 else []):
+            if "/" not in pat and not hc.has_glob(pat) and hc.shell_glob_match(base, pat) and \
+                    not hc.matches(Path(pat), ctx.lst("allow"), ctx.project):
+                ctx.add("deny", f"{raw} would also name {pat!r} (secrets) if it existed.")
+                return
     names = [p] + named
     for q in named:
         if hc.matches(q, ctx.lst("allow"), ctx.project):
@@ -433,6 +448,10 @@ def analyze_argv(ctx: Ctx, argv: list, depth: int) -> None:
 def check_env_dump(ctx: Ctx, name: str, args: list) -> None:
     if name == "printenv" and not [a for a in args if not a.startswith("-")]:
         ctx.add("deny", "printenv prints every environment variable, including secrets.")
+    elif name == "printenv":
+        for var in (a for a in args if not a.startswith("-")):
+            if ctx.secret_var.search(var):
+                ctx.add("deny", f"printenv {var} would expose a secret.")
     elif name in ("export", "set", "declare", "typeset") and all(a.startswith("-") for a in args) and \
             (name != "set" or not args) and (name != "export" or not args or args == ["-p"]):
         ctx.add("deny", f"{name} without names lists the environment, including secrets.")
@@ -440,6 +459,10 @@ def check_env_dump(ctx: Ctx, name: str, args: list) -> None:
         code = " ".join(args)
         if any(p.search(code) for p in DUMP_PATTERNS):
             ctx.add("deny", "This code prints the whole environment, including secrets.")
+        for m in ENV_NAME_READS.finditer(code):
+            var = m.group(1) or m.group(2)
+            if ctx.secret_var.search(var):
+                ctx.add("deny", f"This code reads {var}, which looks like a secret.")
     elif name in ("echo", "printf", "print"):
         for var in re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", " ".join(args)):
             if ctx.secret_var.search(var):

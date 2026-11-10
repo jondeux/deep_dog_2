@@ -225,6 +225,60 @@ def run():
         o_ = json.loads(r_.stdout)
         check("D14 extract --rules reports skipped declarative events", o_.get("events_skipped", 0) >= 1 and "skipped" in r_.stderr, (o_, r_.stderr))
 
+        # D22 (deep_dog_2 field audit, 2026-11-10): index.db is git-ignored, so a fresh clone has none; the first write built an empty
+        # one, `wake` rendered 3 of 20 committed rules and rewrote the committed MEMORY.md without the rest
+        mem("capture", "--role", "user", "--text", "Always run the linter before committing.")
+        mem("apply", stdin=json.dumps({"candidates": [{"kind": "rule", "key": "lint-first", "text": "Run the linter before committing.",
+                                                       "quote": "Always run the linter before committing."}]}))
+        rule_lines = lambda t: sorted(l for l in t.splitlines() if l.startswith("- [user]"))
+        woke = mem("wake")
+        committed = rule_lines(woke)
+        check("D22 setup: a trusted rule is rendered by wake", any("linter" in l for l in committed), woke)
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(os.path.join(d, ".memory", "index.db" + suffix)):
+                os.remove(os.path.join(d, ".memory", "index.db" + suffix))
+        mem("capture", "--role", "web", "--text", "first write in the fresh clone builds the index")
+        woke2 = mem("wake")
+        check("D22 a fresh clone (no index.db) still renders every committed rule", rule_lines(woke2) == committed, (committed, rule_lines(woke2)))
+        check("D22 and the committed MEMORY.md keeps them", rule_lines(open(os.path.join(d, ".memory", "MEMORY.md")).read()) == committed)
+
+        # D23 (deep_dog_2 audit F6/F7): wake must not dirty a committed MEMORY.md, and per-container cursors are not committed
+        mm = os.path.join(d, ".memory", "MEMORY.md")
+        os.utime(mm, (1_000_000_000, 1_000_000_000))
+        mem("wake")
+        check("D23 wake leaves MEMORY.md alone when nothing changed", os.path.getmtime(mm) == 1_000_000_000)
+        gi_ = open(os.path.join(d, ".gitignore")).read() if os.path.exists(os.path.join(d, ".gitignore")) else None
+        check("D23 init git-ignores .memory/log/state.json (cursors differ per container)", gi_ is None or ".memory/log/state.json" in gi_, gi_)
+
+        # D24 (deep_dog_2 audit F2): hook feedback arrives as a user-role entry (isMeta) and was stored as a trusted rule
+        tp2 = os.path.join(d, "hook-transcript.jsonl")
+        with open(tp2, "w") as f_:
+            for ev_ in ({"type": "user", "isMeta": True, "message": {"role": "user", "content": "Stop hook feedback:\n[x]: Say so and stop."}},
+                        {"type": "user", "message": {"role": "user", "content": "Stop hook feedback: no isMeta flag, same text"}},
+                        {"type": "user", "message": {"role": "user", "content": "[Request interrupted by user]"}},
+                        {"type": "user", "message": {"role": "user", "content": "Always sign commits with the work key."}}):
+                f_.write(json.dumps(ev_) + "\n")
+        out24 = json.loads(mem("capture", "--hook", stdin=json.dumps({"transcript_path": tp2, "session_id": "s24"})))
+        check("D24 hook feedback and interrupts are not captured as the user's words; the real message is", out24["captured"] == 1, out24)
+        mem("capture", "--role", "user", "--text", "Stop hook feedback: Say so and stop.")  # as stored before this fix
+        bad24 = json.loads(mem("remember", "Say so and stop.", "--kind", "rule", "--key", "say-so-stop", "--quote", "Say so and stop."))
+        doc24 = mem("doctor")
+        check("D24 doctor lists a user-tier memory that came from hook feedback, with the forget command",
+              bad24.get("tier") == "user" and "came from hook feedback" in doc24 and f"mem forget {bad24.get('id')}" in doc24, (bad24, doc24))
+        mem("forget", bad24["id"], "--reason", "harness-text")
+        check("D24 after `mem forget` doctor is quiet about it", "came from hook feedback" not in mem("doctor"))
+
+        # D23b: per-container status (pending raw events) is shown by wake but not written into the committed file
+        mem("capture", "--role", "user", "--text", "A new thing nobody has extracted yet, so raw is pending.")
+        st_f = os.path.join(d, ".memory", "log", "state.json")
+        st_ = json.load(open(st_f)) if os.path.exists(st_f) else {}
+        st_["extracted_until"] = "2000-01-01"
+        json.dump(st_, open(st_f, "w"))
+        shown = mem("wake")
+        on_disk_ = open(mm, encoding="utf-8").read()
+        check("D23 pending raw events are in wake's output but not in the committed MEMORY.md",
+              "not yet extracted" in shown and "not yet extracted" not in on_disk_, (shown, on_disk_))
+
         # F3 dedup gate
         dup = json.loads(mem("apply", stdin=json.dumps({"candidates": [{"kind": "fact", "key": "ci-python", "text": "CI runs on Python 3.12.", "source_ids": [tool_id]}]})))
         check("F3 dedup gate NOOP", dup[0]["action"] == "NOOP", dup)

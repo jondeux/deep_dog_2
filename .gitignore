@@ -55,3 +55,4 @@ dist/
 .memory/log/raw-*.jsonl
 .memory/**/*.lock
 .memory/bin/**/__pycache__/
+.memory/log/state.json

@@ -9,6 +9,17 @@ ROLE_TIER = {"user": "user", "tool": "observed", "file": "observed", "assistant"
 RULE_PAT = re.compile(r"(?i)\b(always|never|from now on|don'?t|do not|stop|make sure|please use|prefer|i want|remember that|we use|our [a-z ]+ is)\b")
 
 
+# Text the harness injects as a user-role transcript entry: hook feedback, interrupts, caveats. It is not the user's words, so
+# it must never be captured at the user tier (deep_dog_2 field audit, 2026-11-10: three trusted rules came from a Stop hook).
+HARNESS_PREFIXES = ("<", "stop hook feedback:", "[command hook", "hook feedback:", "[request interrupted", "caveat:")
+
+
+def is_harness_text(text, ev=None):
+    if ev and ev.get("isMeta"):
+        return True
+    return (text or "").lstrip().lower().startswith(HARNESS_PREFIXES)
+
+
 # ---------------- F2: capture ----------------
 def _text_of(content):
     if isinstance(content, str):
@@ -48,7 +59,7 @@ def capture_transcript(store, path, session=None, max_tool_chars=4000):
             text, tool = _text_of(msg.get("content"))
             sess = session or ev.get("sessionId") or ""
             ts = ev.get("timestamp")
-            if text and not (role == "user" and text.startswith("<")):  # skip harness-injected blocks
+            if text and not (role == "user" and is_harness_text(text, ev)):  # skip harness-injected blocks
                 store.capture(role, text, source="transcript", session=sess, ts=_iso(ts))
                 n += 1
             if tool:

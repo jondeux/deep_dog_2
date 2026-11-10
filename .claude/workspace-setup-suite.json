@@ -1,7 +1,7 @@
 {
   "vendored": {
-    "agent-memory": "1.1.9",
-    "continuous-learning": "1.1.9",
-    "hooks-architect": "1.1.9"
+    "agent-memory": "1.1.10",
+    "continuous-learning": "1.1.10",
+    "hooks-architect": "1.1.10"
   }
 }

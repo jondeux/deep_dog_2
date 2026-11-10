@@ -112,6 +112,7 @@ DEFAULT_CONFIG = {
     "runner_globs": list(RUNNER_GLOBS),
 }
 AUTO_LOG = f"{MEM}/auto-log.jsonl"
+SESSION_START_MATCHER = "startup|resume|clear"
 AUTO_DEFAULTS = {"enabled": True, "min_count": 2, "max_per_start": 1, "cooldown_days": 7, "max_turns": 25,
                  "max_budget_usd": 0.5, "model": "sonnet", "effort": "medium", "claude_bin": "claude",
                  "error_retry_days": 1, "max_errors": 3, "check_remote": True, "fetch_timeout": 15}
@@ -422,10 +423,14 @@ def cmd_install(a) -> int:
     mine = [h for e in entries for h in e.get("hooks", []) if "continuous-learning/learn.py" in json.dumps(h)]
     legacy = any("--hook" not in h.get("args", []) for h in mine)  # installed before auto existed: its owner never opted in
     if not mine:
-        entries.append({"hooks": [hook]})
-    for h in mine:  # an entry from before --hook existed would never start a draft: migrate it in place
-        if "--hook" not in h.get("args", []):
-            h["args"] = list(h.get("args", [])) + ["--hook"]
+        entries.append({"matcher": SESSION_START_MATCHER, "hooks": [hook]})
+    for e in entries:
+        for h in e.get("hooks", []):
+            if h not in mine:
+                continue
+            if "--hook" not in h.get("args", []):  # an entry from before --hook existed would never start a draft: migrate it
+                h["args"] = list(h.get("args", [])) + ["--hook"]
+            e.setdefault("matcher", SESSION_START_MATCHER)  # not on compact: a compaction is not a new session to draft in
     sp.write_text(json.dumps(s, indent=2) + "\n", encoding="utf-8")
     pol = root / ".claude" / "hooks-policy.json"
     try:

@@ -53,10 +53,12 @@ def git_facts(root: Path) -> list:
 def file_facts(root: Path, cfg: dict) -> list:
     out, budget = [], int(cfg.get("max_total_chars", 6000))
     per = int(cfg.get("max_chars_per_file", 1500))
+    seen = set()
     for rel in cfg.get("files", []):
         f = root / rel
-        if not f.is_file():
+        if not f.is_file() or f.resolve() in seen:  # policy lists append, so a file named in both layers would print twice
             continue
+        seen.add(f.resolve())
         text = f.read_text(encoding="utf-8", errors="replace").strip()
         clipped = text[:per] + (f"\n[... {len(text) - per} more characters in {rel}]" if len(text) > per else "")
         if len(clipped) > budget:
