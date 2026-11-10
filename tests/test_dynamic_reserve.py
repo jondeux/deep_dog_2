@@ -67,7 +67,7 @@ def test_it_stops_when_spend_plus_the_report_reaches_the_cap():
 def test_it_allows_for_the_next_round_using_what_the_last_one_cost():
     g = Governor(usd_cap=1.0, dynamic_reserve=True)
     g.cost = 0.1
-    assert g.dynamic_reserve_check(0.2) is None                    # first look: a default allowance
+    assert g.dynamic_reserve_check(0.2) is None                    # first look: a default allowance (15 % of the cap)
     g.cost = 0.5                                                   # the round cost $0.40
     assert 0.5 + 0.2 < 1.0                                         # spend + report alone would still fit...
     assert g.dynamic_reserve_check(0.2) is not None                # ...but another $0.40 round would not
@@ -172,3 +172,103 @@ def test_cli_static_reserve_switches_it_off(monkeypatch):
 def test_cli_static_reserve_needs_a_claude_plan_run(monkeypatch):
     with pytest.raises(SystemExit):
         run_cli(monkeypatch, "--prompt", "q", "--static-reserve")
+
+
+# ── mid-round: the per-call research limit follows the projection ────────
+from deep_research.providers import claude_code as cc
+from deep_research.providers.claude_code.governor import GovernorStop
+from langchain_core.messages import HumanMessage
+
+
+def seen_one_round(**kw):
+    """A governor that has checked once (spend $0.10, cheapest report $0.50) and seen 4 research calls at $0.05."""
+    g = Governor(usd_cap=1.0, dynamic_reserve=True, max_concurrent=3, **kw)
+    g.cost = 0.10
+    g.dynamic_reserve_check(0.50)
+    g.by_phase["research"] = {"calls": 4, "cost": 0.20}
+    return g
+
+
+def test_before_any_check_only_the_backstop_limits_research_calls():
+    g = Governor(usd_cap=1.0, dynamic_reserve=True)
+    g.cost = 0.85
+    g.check("research")                                            # below the 90 % backstop: allowed
+    g.cost = 0.91
+    with pytest.raises(GovernorStop):
+        g.check("research")
+
+
+def test_after_a_check_research_calls_stop_where_the_report_would_no_longer_fit():
+    g = seen_one_round()
+    g.cost = 0.30
+    g.check("research")                                            # 0.30 < 1.0 - 0.50 - 3 * 0.05 = 0.35
+    g.cost = 0.36
+    with pytest.raises(GovernorStop) as e:
+        g.check("research")
+    assert e.value.reason == "usd_cap" and "cap" in str(e.value)
+
+
+def test_the_margin_is_the_average_research_call_times_the_calls_in_flight():
+    g = seen_one_round()
+    assert g.limits()["dynamic_research_limit"] == pytest.approx(1.0 - 0.50 - 3 * 0.05)
+    g.max_concurrent = 1
+    assert g.limits()["dynamic_research_limit"] == pytest.approx(1.0 - 0.50 - 1 * 0.05)
+
+
+def test_the_report_phase_is_not_held_to_the_research_limit():
+    g = seen_one_round()
+    g.cost = 0.60
+    g.check("report")                                              # the report may spend what research left
+
+
+def test_the_fixed_reserve_mode_is_unchanged():
+    g = Governor(usd_cap=1.0, dynamic_reserve=False, report_reserve_floor_usd=0.5)
+    g.cost = 0.10
+    g.dynamic_reserve_check(0.50)
+    g.cost = 0.40
+    g.check("research")
+    assert g.limits()["dynamic_research_limit"] is None
+
+
+def test_the_first_round_allowance_grows_with_the_parallel_sub_agents():
+    one = Governor(usd_cap=1.0, dynamic_reserve=True, max_concurrent=1)
+    three = Governor(usd_cap=1.0, dynamic_reserve=True, max_concurrent=3)
+    for g in (one, three):
+        g.dynamic_reserve_check(0.1)
+    assert three.reserve_check["next_round_usd"] == pytest.approx(3 * one.reserve_check["next_round_usd"])
+
+
+def test_the_check_reports_the_research_limit_it_set():
+    g = seen_one_round()
+    assert g.stats()["reserve_check"]["research_limit_usd"] == pytest.approx(0.5)      # cap - cheapest report
+
+
+def test_a_real_adapter_call_is_refused_mid_round_but_the_report_call_goes_through(fake_claude):
+    fake_claude.script([{"text": "the report", "cost": 0.01}])
+    g = seen_one_round()
+    g.cost = 0.40
+    m = cc.build_chat_model("claudecode:haiku-5.5").model_copy(update={"governor": g})
+    with pytest.raises(GovernorStop):
+        m.invoke([HumanMessage("research")])
+    assert fake_claude.calls() == []                               # refused before a process was spawned
+    with cc.report_scope():
+        assert m.invoke([HumanMessage("write")]).content == "the report"
+
+
+def test_the_live6t_round_would_have_been_cut_short(fake_claude):
+    """live6t: the first check came at $0.24; the round then spent $0.85 and ended at $1.10 on a $1.00 cap."""
+    g = Governor(usd_cap=1.0, dynamic_reserve=True, max_concurrent=3)
+    g.cost = 0.24
+    g.dynamic_reserve_check(0.57)
+    g.by_phase["research"] = {"calls": 3, "cost": 0.14}            # the three brief/draft calls so far
+    spent_when_refused = None
+    for _ in range(40):                                            # haiku sub-agent calls at about $0.047
+        try:
+            g.check("research")
+        except GovernorStop:
+            spent_when_refused = g.cost
+            break
+        g.cost += 0.047
+    assert spent_when_refused is not None and spent_when_refused < 0.40
+    assert spent_when_refused + 3 * 0.047 + 0.57 <= 1.0 + 0.05     # in-flight calls plus the report still fit the cap
+

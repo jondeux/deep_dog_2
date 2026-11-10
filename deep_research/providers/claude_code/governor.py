@@ -34,8 +34,10 @@ MIN_CALIBRATION_TOKENS = 10_000
 DEFAULT_UNIT_PRICE = 4e-6
 # Measured projection error was -8 % to +3 % with the research-phase price; this covers it.
 REPORT_COST_MARGIN = 1.25
-# Dynamic reserve: with no earlier round to measure, assume the next round costs this share of the cap.
-FIRST_ROUND_ALLOWANCE = 0.10
+# Dynamic reserve: with no earlier round to measure, assume each parallel sub-agent costs this share of the cap.
+# A guess, set from one live round (3 haiku sub-agents on Tavily raw content cost $0.85 of a $1 cap, far above it);
+# the per-call research limit below is what actually keeps a round inside the cap.
+FIRST_ROUND_ALLOWANCE_PER_AGENT = 0.05
 # Dynamic reserve: the static research limit stays as a backstop, this share of the cap (at least $0.05) below it.
 DYNAMIC_BACKSTOP_SHARE = 0.10
 
@@ -53,6 +55,7 @@ class Governor:
         self.plan_window_max = plan_window_max
         # Stop research when spend + the next round + the projected report reaches the cap (see dynamic_reserve_check).
         self.dynamic_reserve = bool(dynamic_reserve)
+        self._report_floor: Optional[float] = None    # cheapest useful report, as of the last dynamic check
         self._last_check_cost: Optional[float] = None
         self._round_cost = 0.0
         self.reserve_check: Optional[dict] = None
@@ -89,9 +92,20 @@ class Governor:
                 reserve = min(self.report_budget_usd, self.usd_cap * 0.6)
             usd_research = round(self.usd_cap - reserve, 6)
         return {"usd_cap": self.usd_cap, "usd_research_limit": usd_research,
+                "dynamic_research_limit": self._dynamic_research_limit(),
                 "report_budget_usd": self.report_budget_usd, "dynamic_reserve": self.dynamic_reserve,
                 "plan_window_max": self.plan_window_max,
                 "plan_window_research_limit": round(self.plan_window_max - self.window_reserve, 6)}
+
+    def _dynamic_research_limit(self) -> Optional[float]:
+        """Where research CALLS stop once a dynamic check has priced the report: the cap minus the cheapest useful
+        report minus a margin for the calls already in flight (the average research call times the concurrency).
+        None before the first check, without a cap, or in fixed-reserve mode."""
+        if not self.dynamic_reserve or self.usd_cap is None or self._report_floor is None:
+            return None
+        ph = self.by_phase.get("research") or {}
+        avg = ph.get("cost", 0.0) / ph["calls"] if ph.get("calls") else 0.0
+        return round(self.usd_cap - self._report_floor - self.max_concurrent * avg, 6)
 
     def check(self, phase: Optional[str] = None) -> None:
         """Raise ``GovernorStop`` BEFORE spawning when a limit is already reached.
@@ -107,6 +121,10 @@ class Governor:
                     self._trip("plan_window_guard", phase)
                     raise GovernorStop("plan_window_guard",
                                        f"{k} utilization {v:.2f} >= limit {window:.2f}", phase)
+            if phase != "report":                       # mid-round: the report must still fit under the cap
+                dyn = self._dynamic_research_limit()
+                if dyn is not None and (usd is None or dyn < usd):
+                    usd = dyn
             if usd is not None and self.cost >= usd:
                 self._trip("usd_cap", phase)
                 raise GovernorStop("usd_cap",
@@ -145,7 +163,7 @@ class Governor:
         with self._lock:
             spent = self.cost
             if self._last_check_cost is None:
-                self._round_cost = self.usd_cap * FIRST_ROUND_ALLOWANCE
+                self._round_cost = max(self.usd_cap * FIRST_ROUND_ALLOWANCE_PER_AGENT * self.max_concurrent, 0.05)
             elif spent > self._last_check_cost:
                 self._round_cost = spent - self._last_check_cost
             self._last_check_cost = spent
@@ -154,8 +172,10 @@ class Governor:
                 report = min(report, self.report_budget_usd)
             need = spent + self._round_cost + report
             stop = need >= self.usd_cap
+            self._report_floor = report
             self.reserve_check = {"spent_usd": round(spent, 4), "next_round_usd": round(self._round_cost, 4),
-                                  "report_usd": round(report, 4), "cap_usd": self.usd_cap, "stopped": stop}
+                                  "report_usd": round(report, 4), "cap_usd": self.usd_cap, "stopped": stop,
+                                  "research_limit_usd": round(self.usd_cap - report, 4)}
             if not stop:
                 return None
             return (f"spent ${spent:.2f} + next round about ${self._round_cost:.2f} + the cheapest useful report "
