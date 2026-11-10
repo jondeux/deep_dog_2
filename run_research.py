@@ -131,6 +131,8 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
     logger.info(f"Output will be saved to: {output_file}")
 
     cfg = (config or RunConfig()).finalize() if resume is None or config is not None else None
+    out_mode = cfg.output_mode if cfg is not None else OUTPUT_MODE                       # --output-mode / --set
+    trace_on = cfg.enable_research_trace if cfg is not None else ENABLE_RESEARCH_TRACE   # --trace / --no-trace
     memory = FileSnapshotSink(memory_dir)        # keeps the resume state if a usage cap stops the run early
     options = RuntimeOptions(
         run_id=thread_id,
@@ -200,7 +202,7 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
     }
 
     # Write to file if enabled (CLI default output_mode is "file")
-    if OUTPUT_MODE in ("file", "both"):
+    if out_mode in ("file", "both"):
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, "w", encoding="utf-8") as f:
             if not clean_output:
@@ -218,7 +220,7 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
             f.write(f"{final_report}\n\n")
         logger.info(f"Report saved to file: {output_file}")
 
-    if OUTPUT_MODE in ("file", "both") and sources:
+    if out_mode in ("file", "both") and sources:
         sources_json_file = output_dir / f"research_data_{timestamp}.json"
         research_data = {
             "thread_id": thread_id,
@@ -232,7 +234,7 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
             json.dump(research_data, f, indent=2, ensure_ascii=False)
         logger.info(f"Sources saved to: {sources_json_file} ({len(sources)} sources)")
 
-    if OUTPUT_MODE in ("db", "both"):
+    if out_mode in ("db", "both"):
         _save_output_to_db(output_data)
         logger.info("Report saved to database")
 
@@ -241,7 +243,7 @@ async def run_research(prompt: str, output_dir: Path, thread_id: str = None,
     # Generate research trace content (only if enabled in config/env).
     trace_content = None
     trace_file = None
-    trace_data = result.trace if ENABLE_RESEARCH_TRACE else []
+    trace_data = result.trace if trace_on else []
 
     if trace_data:
         interaction_log = ""
@@ -284,7 +286,7 @@ SUPERVISOR REACTION:
             trace_content += "---\n\n"
             trace_content += interaction_log
 
-        if OUTPUT_MODE in ("file", "both") and trace_content:
+        if out_mode in ("file", "both") and trace_content:
             trace_file = output_dir / f"trace_{timestamp}.md"
             trace_file.parent.mkdir(parents=True, exist_ok=True)
             with open(trace_file, "w", encoding="utf-8") as f:
@@ -292,7 +294,7 @@ SUPERVISOR REACTION:
             logger.info(f"Research trace saved to: {trace_file}")
 
     output_data["trace_content"] = trace_content
-    if OUTPUT_MODE in ("db", "both"):
+    if out_mode in ("db", "both"):
         _save_output_to_db(output_data)
         logger.info("Report saved to database")
 
@@ -358,36 +360,8 @@ Examples:
         help="Thread ID for the research session (default: auto-generated timestamp)",
     )
 
-    picker = parser.add_argument_group(
-        "model picker (Claude subscription)",
-        "Run every LLM call through the unmodified `claude` CLI on YOUR OWN plan. Personal use only. "
-        "Models: haiku-5.5, sonnet-5.5, opus-5.5. Efforts: low, medium, high, xhigh, max.")
-    picker.add_argument("--preset", help="economy (default when any picker flag is used), benchmark, custom, "
-                                         "testing-framework")
-    for role in ("supervisor", "draft", "subagent"):
-        picker.add_argument(f"--{role}-model", help=f"model for the {role} role")
-        picker.add_argument(f"--{role}-effort", help=f"reasoning effort for the {role} role")
-    picker.add_argument("--search", default="claude", help="web search backend: claude (default, no key), exa, tavily, both")
-    picker.add_argument("--list-presets", action="store_true", help="show the presets and exit")
-    picker.add_argument("--no-page-reader", action="store_true",
-                        help="with --search claude, do not read pages through WebFetch: agents get the search summary "
-                             "only (the cheaper, thinner arm)")
-    picker.add_argument("--page-reads", type=int, default=None, metavar="N",
-                        help="with --search claude: pages each agent reads through WebFetch (default 3; its other reads stay "
-                             "search summaries; 0 = no limit, the slower, deeper arm)")
-    picker.add_argument("--usd-cap", type=float, default=None,
-                        help="list-price cap in USD for the whole run (default 5.0). Research stops when spend plus the "
-                             "projected final report reaches it (--static-reserve: at 75%% of it)")
-    picker.add_argument("--report-budget", type=float, default=None, metavar="USD",
-                        help="most the final-report call may cost, in USD (default: whatever is left under --usd-cap). "
-                             "The engine projects the call's cost first: over budget it shortens the per-source text, and if "
-                             "even that is too dear it returns the findings digest, which --resume can finish with a higher budget")
-    picker.add_argument("--static-reserve", action="store_true",
-                        help="keep a fixed share of --usd-cap (25%%, at least $0.50) for the final report instead of "
-                             "stopping research when spend plus the projected report reaches the cap")
-    picker.add_argument("--plan-window-max", type=float, default=None,
-                        help="never exceed this share of the plan window, 0 to 1 (default 0.8). Research stops "
-                             "0.1 below it, the rest is kept for the final report")
+    from deep_research import cli_options
+    cli_options.add_arguments(parser)
 
     args = parser.parse_args()
 
@@ -395,6 +369,20 @@ Examples:
         from deep_research import model_picker
         for name in model_picker.PRESETS:
             print(model_picker.describe(name) + ("   (default)" if name == model_picker.DEFAULT_PRESET else ""))
+        return
+    if args.list_models:
+        print(cli_options.models_report())
+        return
+    if args.list_agents:
+        print(cli_options.agents_report())
+        return
+
+    if args.show_config:
+        try:
+            cfg = cli_options.build_config(args) or RunConfig()
+            print(cli_options.show_config(cfg))
+        except (cli_options.CliError, ValueError) as e:
+            parser.error(str(e))
         return
 
     if args.resume and (args.prompt or args.prompt_file):
@@ -409,64 +397,13 @@ Examples:
             snapshot = load_snapshot(args.memory_dir or DEFAULT_MEMORY_DIR, args.resume)
         except ValueError as e:
             parser.error(str(e))
-        if args.preset or any(getattr(args, f"{r}_{k}") for r in ("supervisor", "draft", "subagent")
-                              for k in ("model", "effort")) or args.search != "claude":
-            parser.error("--resume keeps the saved models and search; only --usd-cap, --report-budget and --plan-window-max may change")
 
-    picked = None
-    wants_picker = args.preset or any(getattr(args, f"{r}_{k}") for r in ("supervisor", "draft", "subagent")
-                                      for k in ("model", "effort"))
-    if wants_picker:
-        from deep_research import model_picker
-        overrides = {}
-        try:
-            base = model_picker.choices(args.preset or model_picker.DEFAULT_PRESET)
-            for role in ("supervisor", "draft", "subagent"):
-                m, e = getattr(args, f"{role}_model"), getattr(args, f"{role}_effort")
-                if m or e:
-                    cur = base.get(role) or base["supervisor"]
-                    overrides[role] = (m or cur[0], e or cur[1])
-            picked = model_picker.apply_preset(RunConfig(), args.preset or model_picker.DEFAULT_PRESET, search=args.search, **overrides)
-        except ValueError as e:
-            parser.error(str(e))
-        print("Models: " + model_picker.describe(args.preset or model_picker.DEFAULT_PRESET, **overrides))
-        caps = {k: v for k, v in (("claude_code_usd_cap", args.usd_cap),
-                                  ("claude_code_report_budget_usd", args.report_budget),
-                                  ("claude_code_plan_window_max", args.plan_window_max)) if v is not None}
-        if caps:
-            if (args.usd_cap is not None and args.usd_cap <= 0) or (
-                    args.report_budget is not None and args.report_budget <= 0) or (
-                    args.plan_window_max is not None and not 0.1 <= args.plan_window_max <= 1):
-                parser.error("--usd-cap and --report-budget must be above 0 and --plan-window-max between 0.1 and 1")
-            from dataclasses import replace
-            picked = replace(picked, **caps)
-        if args.static_reserve:
-            from dataclasses import replace
-            picked = replace(picked, claude_code_dynamic_reserve=False)
-        if args.no_page_reader:
-            from dataclasses import replace
-            picked = replace(picked, claude_page_reader=False)
-        if args.page_reads is not None:
-            if args.page_reads < 0:
-                parser.error("--page-reads must be 0 or more")
-            from dataclasses import replace
-            picked = replace(picked, claude_page_reads_per_agent=args.page_reads)
-    elif args.resume and (args.usd_cap is not None or args.plan_window_max is not None
-                          or args.report_budget is not None):
-        # A resumed segment gets a fresh cap; the window guard still reads the real plan window.
-        if (args.usd_cap is not None and args.usd_cap <= 0) or (
-                args.report_budget is not None and args.report_budget <= 0) or (
-                args.plan_window_max is not None and not 0.1 <= args.plan_window_max <= 1):
-            parser.error("--usd-cap and --report-budget must be above 0 and --plan-window-max between 0.1 and 1")
-        from dataclasses import replace
-        from deep_research.resume import config_from_snapshot
-        picked = replace(config_from_snapshot(snapshot), **{k: v for k, v in (
-            ("claude_code_usd_cap", args.usd_cap), ("claude_code_report_budget_usd", args.report_budget),
-            ("claude_code_plan_window_max", args.plan_window_max))
-            if v is not None})
-    elif args.usd_cap is not None or args.plan_window_max is not None or args.report_budget is not None \
-            or args.static_reserve or args.no_page_reader or args.page_reads is not None:
-        parser.error("--usd-cap, --report-budget, --static-reserve, --plan-window-max, --no-page-reader and --page-reads apply to Claude-plan runs: add --preset or a model flag")
+    try:
+        picked = cli_options.build_config(args, snapshot)
+        if picked is not None and snapshot is None:
+            picked, _ = cli_options.prepare_hosted(picked)      # prices and keys for third-party models, before any spend
+    except (cli_options.CliError, ValueError) as e:
+        parser.error(str(e))
 
     if snapshot is not None:
         prompt = None

@@ -79,6 +79,7 @@ class Governor:
         self.stop_phase: Optional[str] = None
         self.by_model: dict = {}
         self.by_phase: dict = {}      # cost of research calls vs final-report calls (sizes the report reserve)
+        self.prices: dict = {}        # third-party model -> (USD per input token, USD per output token), when known
 
     def limits(self) -> dict:
         usd_research = None
@@ -149,7 +150,13 @@ class Governor:
             return m["cost"] / eq
         return DEFAULT_UNIT_PRICE
 
+    def set_price(self, model: str, input_per_token: float, output_per_token: float) -> None:
+        self.prices[model] = (float(input_per_token), float(output_per_token))
+
     def project_report_cost(self, model_id: Optional[str], input_tokens: float, output_tokens: float) -> float:
+        if model_id in self.prices:                   # a third-party model with a known price: no calibration needed
+            pin, pout = self.prices[model_id]
+            return REPORT_COST_MARGIN * (pin * input_tokens + pout * output_tokens)
         return REPORT_COST_MARGIN * self.unit_price(model_id) * (input_tokens + OUTPUT_PRICE_RATIO * output_tokens)
 
     def dynamic_reserve_check(self, min_report_cost: float) -> Optional[str]:
@@ -208,6 +215,24 @@ class Governor:
                     self.util[k] = v
                     if self.util_first.get(k) is None:
                         self.util_first[k] = v
+
+    def ingest_external(self, model: str, cost: float, input_tokens: int, output_tokens: int, source: str) -> None:
+        """Record one third-party call. ``source``: "reported" (the provider's own figure), "estimated" (tokens times
+        a price per million) or "unpriced" (tokens only; the cap cannot see it). Counts toward the same cap."""
+        with self._lock:
+            self.calls += 1
+            self.cost += cost
+            ph = self.by_phase.setdefault(current_phase(), {"calls": 0, "cost": 0.0})
+            ph["calls"] += 1
+            ph["cost"] = round(ph["cost"] + cost, 6)
+            m = self.by_model.setdefault(model, {"calls": 0, "cost": 0.0, "input_tokens": 0, "output_tokens": 0,
+                                                 "source": source})
+            m["calls"] += 1
+            m["cost"] = round(m["cost"] + cost, 6)
+            m["input_tokens"] += int(input_tokens)
+            m["output_tokens"] += int(output_tokens)
+            if m.get("source") != source:
+                m["source"] = "mixed"
 
     def stats(self) -> dict:
         with self._lock:

@@ -20,11 +20,45 @@ DEFAULT_PRESET = "economy"
 ROLES = ("supervisor", "draft", "subagent")
 
 
+# Third-party backends, selected by an explicit "<prefix>:<model id>" (keys come from the environment, never the CLI).
+HOSTED_PREFIXES = ("openrouter", "deepinfra", "together", "fireworks")
+
+
+def is_hosted(spec: str) -> bool:
+    """True for ``deepinfra:<id>``, ``openrouter:<slug>``, ``together:<id>``, ``fireworks:<id>``."""
+    head, sep, rest = str(spec).partition(":")
+    return bool(sep) and head.lower() in HOSTED_PREFIXES and bool(rest.strip())
+
+
+def split_spec(spec: str) -> tuple:
+    """``(model, effort)`` for a model spec: ``sonnet-5.5``, ``sonnet-5.5@high``, ``claudecode:opus-5.5@low`` or a
+    hosted ``deepinfra:<id>`` (effort is always None for hosted ids)."""
+    spec = str(spec).strip()
+    if is_hosted(spec):
+        head, _, rest = spec.partition(":")
+        return f"{head.lower()}:{rest.strip()}", None
+    if spec.lower().startswith("claudecode:"):
+        spec = spec[len("claudecode:"):]
+    model, _, effort = spec.partition("@")
+    return model.strip(), (effort.strip() or None)
+
+
 def _name(model: str, effort: Optional[str]) -> str:
+    if is_hosted(model):
+        if effort:
+            raise ValueError(f"Effort {effort!r} applies only to Claude-plan models, not to {model!r}.")
+        return split_spec(model)[0]
     if model not in MODEL_IDS and not model.startswith("claude-"):
-        raise ValueError(f"Unknown model {model!r}. Use one of {', '.join(MODEL_IDS)} or a full 'claude-...' id.")
+        raise ValueError(f"Unknown model {model!r}. Use one of {', '.join(MODEL_IDS)}, a full 'claude-...' id, "
+                         f"or <{'|'.join(HOSTED_PREFIXES)}>:<model id>.")
     e = validate_effort(effort)
     return f"claudecode:{model}" + (f"@{e}" if e else "")
+
+
+def chain_name(spec: str, effort: Optional[str] = None) -> str:
+    """The chain entry for a model spec (the engine's name grammar)."""
+    model, spec_effort = split_spec(spec)
+    return _name(model, effort or spec_effort)
 
 
 def choices(preset: str = DEFAULT_PRESET, **overrides) -> dict:
@@ -72,7 +106,9 @@ def apply_preset(config, preset: str = DEFAULT_PRESET, search: str = "claude", *
 
 def describe(preset: str = DEFAULT_PRESET, **overrides) -> str:
     c = choices(preset, **overrides)
-    parts = [f"{r}: {c[r][0]} @ {c[r][1]}" for r in ROLES]
+    parts = [f"{r}: {c[r][0]}" + (f" @ {c[r][1]}" if c[r][1] else "") for r in ROLES]
+    by_agent = c.get("subagent_by_agent") or {}
+    parts += [f"{a}: {m}" + (f" @ {e}" if e else "") for a, (m, e) in by_agent.items()]
     return f"{preset} -> " + "; ".join(parts)
 
 

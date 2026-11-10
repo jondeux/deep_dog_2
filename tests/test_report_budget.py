@@ -245,6 +245,5 @@ def test_cli_report_budget_may_change_on_resume(monkeypatch, tmp_path):
     assert seen["config"].claude_code_report_budget_usd == 1.5
 
 
-def test_cli_report_budget_needs_a_claude_plan_run(monkeypatch):
-    with pytest.raises(SystemExit):
-        run_cli(monkeypatch, "--prompt", "q", "--report-budget", "1")
+def test_cli_report_budget_reaches_the_config_without_a_picker(monkeypatch):
+    assert run_cli(monkeypatch, "--prompt", "q", "--report-budget", "1")["config"].claude_code_report_budget_usd == 1.0

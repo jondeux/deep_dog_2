@@ -179,9 +179,9 @@ def test_cli_switch_turns_the_page_reader_off(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--preset", "economy", "--no-page-reader"])
     rr.main()
     assert seen["config"].claude_page_reader is False
-    monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--no-page-reader"])
-    with pytest.raises(SystemExit):
-        rr.main()
+    monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--no-page-reader"])      # no picker needed any more
+    rr.main()
+    assert seen["config"].claude_page_reader is False
 
 
 # ── hybrid reading: a few pages per agent are read in full, the rest stay summaries ─────────────────────────
@@ -264,7 +264,7 @@ def test_cli_page_reads_flag(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--preset", "economy", "--page-reads", "0"])
     rr.main()
     assert seen["config"].claude_page_reads_per_agent == 0
-    for bad in (["--page-reads", "2"], ["--preset", "economy", "--page-reads", "-1"]):
+    for bad in (["--preset", "economy", "--page-reads", "-1"],):
         monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", *bad])
         with pytest.raises(SystemExit):
             rr.main()

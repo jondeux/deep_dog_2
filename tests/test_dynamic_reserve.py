@@ -169,9 +169,8 @@ def test_cli_static_reserve_switches_it_off(monkeypatch):
     assert seen["config"].claude_code_dynamic_reserve is True
 
 
-def test_cli_static_reserve_needs_a_claude_plan_run(monkeypatch):
-    with pytest.raises(SystemExit):
-        run_cli(monkeypatch, "--prompt", "q", "--static-reserve")
+def test_cli_static_reserve_reaches_the_config_without_a_picker(monkeypatch):
+    assert run_cli(monkeypatch, "--prompt", "q", "--static-reserve")["config"].claude_code_dynamic_reserve is False
 
 
 # ── mid-round: the per-call research limit follows the projection ────────

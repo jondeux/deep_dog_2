@@ -370,7 +370,7 @@ def test_hosted_rows_are_not_in_the_scan_table():
     assert [p.name for p in cfg._PROVIDERS] == [
         "glm", "nemotron", "deepseek-baba-singapore", "deepseek", "mimo",
         "meta-openrouter", "muse", "gemini", "openai"]
-    assert sorted(cfg._HOSTED_PROVIDERS) == ["deepinfra", "fireworks", "together"]
+    assert sorted(cfg._HOSTED_PROVIDERS) == ["deepinfra", "fireworks", "openrouter", "together"]
 
 
 # ── validate_credentials / chain filtering with prefixed models ───────────

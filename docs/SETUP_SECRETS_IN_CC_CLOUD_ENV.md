@@ -355,3 +355,16 @@ anything you did not run in a session where the secret was attached.
    (the `claude` binary's figure, not a bill). Exa and Tavily bill on their own dashboards.
 6. **Tavily needs the placeholder variable, Exa needs the switch.** Tavily: `TAVILY_API_KEY=set-by-network-secret`.
    Exa: `EXA_AUTH_PROXY=1`. Neither variable reaches the web UI (it never reads the process environment).
+
+## 7. Third-party models on the CLI (added 2026-11-10)
+
+`run_research.py` can give any role a model from `deepinfra:`, `openrouter:`, `together:` or `fireworks:` (for example
+`--subagent-model deepinfra:deepseek-ai/DeepSeek-V3`); the manual is `docs/DEEP_DOG_RESEARCH_MANUAL.md`, section 5.
+
+- **Keys are environment variables, never flags or chat:** `DEEPINFRA_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`,
+  `FIREWORKS_API_KEY`. `python run_research.py --list-models` shows which are set (names only).
+- **A network secret needs a placeholder variable, as Tavily does.** The engine drops a model whose key variable is absent, so with a
+  proxy-injected OpenRouter key set `OPENROUTER_API_KEY=set-by-network-secret`. **Not verified live:** the placeholder-plus-proxy path
+  for OpenRouter has not been run yet (it takes one small paid call); until then treat it as the expected setup, not a tested one.
+- **Spend is metered:** each call's tokens are priced (the provider's reported cost, `--price`, or the provider's public price list)
+  and counted against `--usd-cap` with the Claude-plan calls. A model with no price is refused before the run starts.

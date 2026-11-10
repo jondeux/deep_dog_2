@@ -21,14 +21,21 @@ def format_usage(usage: Optional[dict]) -> str:
         if now is not None and start is not None and abs(now - start) >= 0.005:
             text += f" ({_pct(start)} at the first call)"
         return text
+    by_model = usage.get("by_model") or {}
+    third_party = any(m.get("source") for m in by_model.values())
+    on_plan = any(not m.get("source") for m in by_model.values()) or not by_model
     lines = [f"Usage (list-price estimate, not a bill): ${usage.get('est_cost_usd', 0):.4f} over "
-             f"{usage.get('calls', 0)} calls; plan window: 5-hour window {window('five_hour')}, "
-             f"7-day window {window('seven_day')}"]
+             f"{usage.get('calls', 0)} calls"
+             + (f"; plan window: 5-hour window {window('five_hour')}, 7-day window {window('seven_day')}" if on_plan else "")]
     if lim.get("usd_cap") is not None:
         lines[0] += f"; cap ${lim['usd_cap']:.2f}, window guard {_pct(lim.get('plan_window_max'))}"
-    for model, m in sorted((usage.get("by_model") or {}).items()):
-        lines.append(f"  {model}: {m.get('calls', 0)} calls, ${m.get('cost', 0):.4f}, "
-                     f"{m.get('input_tokens', 0)} in / {m.get('output_tokens', 0)} out tokens")
+    for model, m in sorted(by_model.items()):
+        lines.append(f"  {model}: {m.get('calls', 0)} calls, ${m.get('cost', 0):.4f}"
+                     + (f" ({m['source']})" if m.get("source") else "") +
+                     f", {m.get('input_tokens', 0)} in / {m.get('output_tokens', 0)} out tokens")
+    if third_party:
+        lines.append("  third-party rows: reported = the provider's own figure; estimated = tokens x your price per million; "
+                     "unpriced = counted in tokens only, not in the cap")
     rep = (usage.get("by_phase") or {}).get("report")
     if rep:
         lines.append(f"  report phase: ${rep.get('cost', 0):.4f} over {rep.get('calls', 0)} calls (the rest was research)")

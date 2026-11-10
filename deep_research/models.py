@@ -79,6 +79,16 @@ class Credentials:
                          if (secret := os.getenv(var))})
 
 
+def _is_hosted(name) -> bool:
+    from deep_research.providers.hosted_meter import is_hosted_name
+    return is_hosted_name(name)
+
+
+def _norm_hosted(name) -> str:
+    from deep_research.providers.hosted_meter import norm_key
+    return norm_key(name)
+
+
 class ModelFactory:
     """Builds isolated, per-run LangChain model clients."""
 
@@ -100,12 +110,18 @@ class ModelFactory:
                 report_reserve=c.claude_code_report_reserve, window_reserve=c.claude_code_window_reserve,
                 report_reserve_floor_usd=c.claude_code_report_reserve_floor_usd,
                 report_budget_usd=c.claude_code_report_budget_usd, dynamic_reserve=c.claude_code_dynamic_reserve)
+            for key, (price_in, price_out) in (c.hosted_prices_per_mtok or {}).items():
+                self._governor.set_price(_norm_hosted(key), price_in / 1e6, price_out / 1e6)
         return self._governor
 
     def report_cost_estimator(self, model_id=None):
         """Projects the final-report call's cost against its budget; None when no ``claudecode:`` model ran."""
         if self._governor is None:
             return None
+        if model_id is None:                      # a third-party report writer has no model_id of its own
+            first = (self.config.supervisor_model_fallback_chain or [None])[0]
+            if _is_hosted(first):
+                model_id = _norm_hosted(first)
         return self._governor.report_estimator(model_id)
 
     def usage(self) -> Optional[dict]:
@@ -155,6 +171,9 @@ class ModelFactory:
             if isinstance(model_name, str) and model_name.lower().startswith("claudecode:"):
                 from deep_research.providers.claude_code import governor_scope
                 stack.enter_context(governor_scope(self.governor))
+            if self._meters_hosted([model_name]):
+                from deep_research.providers.hosted_meter import meter_scope
+                stack.enter_context(meter_scope(self.governor))
             return _cfg.get_model(
                 model_name,
                 temperature=temperature,
@@ -186,6 +205,10 @@ class ModelFactory:
             self._cache[key] = model
         return model
 
+    def _meters_hosted(self, chain) -> bool:
+        """Third-party models in this chain are counted against the run's cap (``RunConfig.hosted_metering``)."""
+        return bool(self.config.hosted_metering) and any(_is_hosted(n) for n in chain)
+
     @staticmethod
     def _uses_claude_code(kind, chain, tools) -> bool:
         return any(isinstance(n, str) and n.lower().startswith("claudecode:") for n in chain)
@@ -203,6 +226,9 @@ class ModelFactory:
             if self._uses_claude_code(kind, chain, tools):
                 from deep_research.providers.claude_code import governor_scope
                 stack.enter_context(governor_scope(self.governor))
+            if self._meters_hosted(chain):
+                from deep_research.providers.hosted_meter import meter_scope
+                stack.enter_context(meter_scope(self.governor))
             if kind == "supervisor":
                 return _cfg.get_supervisor_model(
                     tools=tools, chain=list(chain),

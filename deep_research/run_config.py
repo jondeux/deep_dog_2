@@ -112,6 +112,12 @@ class RunConfig:
     # Dynamic reserve (CLI: --static-reserve turns it off): research stops when spend + the next round + the projected
     # cheapest useful report reaches the cap, instead of at a fixed share of it. False: the fixed reserve above.
     claude_code_dynamic_reserve: bool = True
+    # Third-party models ("deepinfra:", "together:", "fireworks:", "openrouter:"): meter their tokens and count the spend
+    # against claude_code_usd_cap together with the Claude-plan calls (deep_research/providers/hosted_meter.py). Off by
+    # default so the web UI is unchanged; the CLI turns it on when a chain names such a model.
+    hosted_metering: bool = False
+    # USD per million tokens, "<prefix>:<model>": [input, output]. Used when the provider does not report a call's cost.
+    hosted_prices_per_mtok: dict = field(default_factory=dict)
     # Search backend for web_search_engine="claude": Claude's own WebSearch tool, run by this model.
     claude_search_model: str = "claudecode:haiku-5.5@low"
     # With web_search_engine="claude", fetch_urls reads the real page through Claude's WebFetch (False: the search summary is served, as before).

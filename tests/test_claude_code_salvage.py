@@ -247,7 +247,7 @@ def load_cli():
     return rr
 
 
-def test_cli_cap_flags_reach_the_config_and_need_a_picker(monkeypatch, capsys):
+def test_cli_cap_flags_reach_the_config_and_are_validated(monkeypatch, capsys):
     import sys
     rr = load_cli()
     seen = {}
@@ -260,7 +260,10 @@ def test_cli_cap_flags_reach_the_config_and_need_a_picker(monkeypatch, capsys):
                                       "--usd-cap", "3", "--plan-window-max", "0.6"])
     rr.main()
     assert seen["config"].claude_code_usd_cap == 3.0 and seen["config"].claude_code_plan_window_max == 0.6
-    for bad in (["--usd-cap", "3"], ["--preset", "economy", "--usd-cap", "0"],
+    monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", "--usd-cap", "3"])      # no picker needed any more
+    rr.main()
+    assert seen["config"].claude_code_usd_cap == 3.0
+    for bad in (["--preset", "economy", "--usd-cap", "0"],
                 ["--preset", "economy", "--plan-window-max", "2"]):
         monkeypatch.setattr(sys, "argv", ["rr", "--prompt", "q", *bad])
         with pytest.raises(SystemExit):

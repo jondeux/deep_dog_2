@@ -69,6 +69,7 @@ Examples of model names accepted by get_model():
 #   together:<model>           env: TOGETHER_API_KEY    e.g. "together:openai/gpt-oss-120b"
 #   fireworks:<model>          env: FIREWORKS_API_KEY
 #       e.g. "fireworks:accounts/fireworks/models/llama-v3p3-70b-instruct"
+#   openrouter:<slug>          env: OPENROUTER_API_KEY  e.g. "openrouter:deepseek/deepseek-chat"
 #   The prefix wins over every other rule, including ROUTE_VIA_OPENROUTER.
 #
 # ═══════════════════════════════════════════════════════════════════════════
@@ -852,6 +853,10 @@ _HOSTED_PROVIDERS = {
                           ("TOGETHER_API_KEY",), "https://api.together.ai/v1"),
     "fireworks": _Provider("fireworks", _no_name_match,
                            ("FIREWORKS_API_KEY",), "https://api.fireworks.ai/inference/v1"),
+    # "openrouter:<slug>", e.g. "openrouter:deepseek/deepseek-chat": any OpenRouter model by its own slug (the
+    # name-mapped route via OpenRouter, ROUTE_VIA_OPENROUTER, is separate and unchanged).
+    "openrouter": _Provider("openrouter", _no_name_match,
+                            ("OPENROUTER_API_KEY",), "https://openrouter.ai/api/v1"),
 }
 
 
@@ -1213,6 +1218,12 @@ def get_model(model_name: str = SUBAGENT_MODEL, temperature: float = 0, max_toke
             }
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
+            if hosted.name == "openrouter":
+                kwargs["extra_body"] = {"usage": {"include": True}}      # OpenRouter then reports each call's cost
+            from deep_research.providers.hosted_meter import callbacks_for
+            meter_callbacks = callbacks_for(model_name)
+            if meter_callbacks:
+                kwargs["callbacks"] = meter_callbacks
             return ChatOpenAI(**kwargs)
 
     # ROUTE_VIA_OPENROUTER: send known direct-API models through OpenRouter so a
