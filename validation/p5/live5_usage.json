@@ -1,0 +1,61 @@
+{
+  "thread_id": "live5",
+  "status": "partial",
+  "stopped_early": {
+    "reason": "usd_cap",
+    "phase": "research",
+    "report_mode": "digest"
+  },
+  "usage": {
+    "calls": 33,
+    "est_cost_usd": 0.51665,
+    "util": {
+      "five_hour": 0.53,
+      "seven_day": 0.31
+    },
+    "util_first": {
+      "five_hour": 0.51,
+      "seven_day": 0.3
+    },
+    "stopped": "usd_cap",
+    "stop_phase": "research",
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "calls": 4,
+        "cost": 0.374794,
+        "input_tokens": 60778,
+        "output_tokens": 16837
+      },
+      "claude-haiku-5-5": {
+        "calls": 29,
+        "cost": 0.141854,
+        "input_tokens": 530598,
+        "output_tokens": 91541
+      }
+    },
+    "by_phase": {
+      "research": {
+        "calls": 33,
+        "cost": 0.516649
+      }
+    },
+    "limits": {
+      "usd_cap": 1.0,
+      "usd_research_limit": 0.5,
+      "report_budget_usd": null,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    },
+    "report_plan": {
+      "action": "digest",
+      "budget_usd": 0.48334960000000005,
+      "projected_usd": 0.9161,
+      "text_limit": null,
+      "source_chars_before": 220616,
+      "source_chars_after": 0
+    }
+  },
+  "elapsed_seconds": 349.7,
+  "report_file": "outputs/research_2026-11-10_17-07-04_wvz.md"
+}
