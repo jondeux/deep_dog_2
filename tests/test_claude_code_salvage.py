@@ -355,5 +355,7 @@ def test_the_floor_is_what_stops_research_early_at_a_small_cap():
 def test_the_config_default_floor_reaches_the_governor():
     cfg = api_config()
     assert cfg.claude_code_report_reserve_floor_usd == 0.5
-    f = ModelFactory(mp.apply_preset(api_config(claude_code_usd_cap=1.0), "testing-framework"))
+    # The floor belongs to the fixed reserve; the dynamic reserve (the default) replaces it with a projection.
+    f = ModelFactory(mp.apply_preset(api_config(claude_code_usd_cap=1.0, claude_code_dynamic_reserve=False),
+                                     "testing-framework"))
     assert f.governor.limits()["usd_research_limit"] == pytest.approx(0.5)

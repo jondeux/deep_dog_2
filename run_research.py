@@ -376,12 +376,15 @@ Examples:
                         help="with --search claude: pages each agent reads through WebFetch (default 3; its other reads stay "
                              "search summaries; 0 = no limit, the slower, deeper arm)")
     picker.add_argument("--usd-cap", type=float, default=None,
-                        help="list-price cap in USD for the whole run (default 5.0). Research stops at 75%% of it, "
-                             "the rest is kept for writing the final report")
+                        help="list-price cap in USD for the whole run (default 5.0). Research stops when spend plus the "
+                             "projected final report reaches it (--static-reserve: at 75%% of it)")
     picker.add_argument("--report-budget", type=float, default=None, metavar="USD",
                         help="most the final-report call may cost, in USD (default: whatever is left under --usd-cap). "
                              "The engine projects the call's cost first: over budget it shortens the per-source text, and if "
                              "even that is too dear it returns the findings digest, which --resume can finish with a higher budget")
+    picker.add_argument("--static-reserve", action="store_true",
+                        help="keep a fixed share of --usd-cap (25%%, at least $0.50) for the final report instead of "
+                             "stopping research when spend plus the projected report reaches the cap")
     picker.add_argument("--plan-window-max", type=float, default=None,
                         help="never exceed this share of the plan window, 0 to 1 (default 0.8). Research stops "
                              "0.1 below it, the rest is kept for the final report")
@@ -437,6 +440,9 @@ Examples:
                 parser.error("--usd-cap and --report-budget must be above 0 and --plan-window-max between 0.1 and 1")
             from dataclasses import replace
             picked = replace(picked, **caps)
+        if args.static_reserve:
+            from dataclasses import replace
+            picked = replace(picked, claude_code_dynamic_reserve=False)
         if args.no_page_reader:
             from dataclasses import replace
             picked = replace(picked, claude_page_reader=False)
@@ -459,8 +465,8 @@ Examples:
             ("claude_code_plan_window_max", args.plan_window_max))
             if v is not None})
     elif args.usd_cap is not None or args.plan_window_max is not None or args.report_budget is not None \
-            or args.no_page_reader or args.page_reads is not None:
-        parser.error("--usd-cap, --report-budget, --plan-window-max, --no-page-reader and --page-reads apply to Claude-plan runs: add --preset or a model flag")
+            or args.static_reserve or args.no_page_reader or args.page_reads is not None:
+        parser.error("--usd-cap, --report-budget, --static-reserve, --plan-window-max, --no-page-reader and --page-reads apply to Claude-plan runs: add --preset or a model flag")
 
     if snapshot is not None:
         prompt = None

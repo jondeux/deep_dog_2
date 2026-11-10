@@ -109,6 +109,9 @@ class RunConfig:
     # Before the call the engine projects its cost; over budget, per-source text is trimmed, and if even the bare call
     # is too dear the findings digest is returned (stop reason "report_budget"; --resume with a higher budget).
     claude_code_report_budget_usd: Optional[float] = None
+    # Dynamic reserve (CLI: --static-reserve turns it off): research stops when spend + the next round + the projected
+    # cheapest useful report reaches the cap, instead of at a fixed share of it. False: the fixed reserve above.
+    claude_code_dynamic_reserve: bool = True
     # Search backend for web_search_engine="claude": Claude's own WebSearch tool, run by this model.
     claude_search_model: str = "claudecode:haiku-5.5@low"
     # With web_search_engine="claude", fetch_urls reads the real page through Claude's WebFetch (False: the search summary is served, as before).

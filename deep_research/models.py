@@ -99,7 +99,7 @@ class ModelFactory:
                 max_concurrent=c.claude_code_max_concurrent, timeout_s=c.claude_code_timeout_seconds,
                 report_reserve=c.claude_code_report_reserve, window_reserve=c.claude_code_window_reserve,
                 report_reserve_floor_usd=c.claude_code_report_reserve_floor_usd,
-                report_budget_usd=c.claude_code_report_budget_usd)
+                report_budget_usd=c.claude_code_report_budget_usd, dynamic_reserve=c.claude_code_dynamic_reserve)
         return self._governor
 
     def report_cost_estimator(self, model_id=None):

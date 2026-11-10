@@ -21,6 +21,8 @@ CHARS_PER_TOKEN = 2.4
 OUTPUT_TOKENS = 25_000
 # A source cut shorter than this adds nothing the findings do not already say, so its text is dropped instead.
 MIN_USEFUL_CHARS = 300
+# The dynamic reserve prices the cheapest report worth writing: each source keeps this much text (about an abstract).
+TEXT_FLOOR_CHARS = 1_500
 
 
 @dataclass(frozen=True)
@@ -78,3 +80,11 @@ def trim_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + " [...text cut to fit the report budget]"
+
+
+def minimal_report_cost(project: Callable[[float, float], float], fixed_chars: int,
+                        source_sizes: Sequence[int]) -> float:
+    """Projected cost of the cheapest report worth writing: the history plus ``TEXT_FLOOR_CHARS`` of each source."""
+    kept = sum(min(max(int(s), 0), TEXT_FLOOR_CHARS) for s in source_sizes)
+    return project((fixed_chars + kept) / CHARS_PER_TOKEN, OUTPUT_TOKENS)
+

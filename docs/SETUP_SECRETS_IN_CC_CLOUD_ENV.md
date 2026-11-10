@@ -348,7 +348,9 @@ anything you did not run in a session where the secret was attached.
    first and trims the source text to fit the room left under `--usd-cap`, or `--report-budget USD` if you set less. If
    even the bare call is too dear it returns the findings digest instead of overspending (stop reason `report_budget`;
    `--resume <id> --report-budget <higher>` finishes it). The projection is an estimate from the model's own measured
-   price with a 25 % margin; it is tested on a fake binary, not yet on a live run.
+   price with a 25 % margin; it is tested on a fake binary, not yet on a live run. Research also stops earlier by
+   itself when spend plus the projected report would reach the cap (the dynamic reserve; `--static-reserve` restores
+   the old fixed 25 % reserve).
 5. **Search credits and run cost are separate.** A run's cost figure is the list-price estimate of the model calls
    (the `claude` binary's figure, not a bill). Exa and Tavily bill on their own dashboards.
 6. **Tavily needs the placeholder variable, Exa needs the switch.** Tavily: `TAVILY_API_KEY=set-by-network-secret`.

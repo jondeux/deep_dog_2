@@ -34,6 +34,10 @@ MIN_CALIBRATION_TOKENS = 10_000
 DEFAULT_UNIT_PRICE = 4e-6
 # Measured projection error was -8 % to +3 % with the research-phase price; this covers it.
 REPORT_COST_MARGIN = 1.25
+# Dynamic reserve: with no earlier round to measure, assume the next round costs this share of the cap.
+FIRST_ROUND_ALLOWANCE = 0.10
+# Dynamic reserve: the static research limit stays as a backstop, this share of the cap (at least $0.05) below it.
+DYNAMIC_BACKSTOP_SHARE = 0.10
 
 
 class Governor:
@@ -45,8 +49,13 @@ class Governor:
     def __init__(self, plan_window_max: float = 0.8, usd_cap: Optional[float] = 5.0,
                  max_concurrent: int = 3, timeout_s: float = 600.0,
                  report_reserve: float = 0.25, window_reserve: float = 0.1, report_reserve_floor_usd: float = 0.0,
-                 report_budget_usd: Optional[float] = None):
+                 report_budget_usd: Optional[float] = None, dynamic_reserve: bool = False):
         self.plan_window_max = plan_window_max
+        # Stop research when spend + the next round + the projected report reaches the cap (see dynamic_reserve_check).
+        self.dynamic_reserve = bool(dynamic_reserve)
+        self._last_check_cost: Optional[float] = None
+        self._round_cost = 0.0
+        self.reserve_check: Optional[dict] = None
         self.usd_cap = usd_cap
         # The most the owner lets the final-report call cost. None: whatever is left under the cap.
         self.report_budget_usd = None if report_budget_usd is None else max(float(report_budget_usd), 0.0)
@@ -74,11 +83,13 @@ class Governor:
             # The report call has a dollar cost of its own (measured $0.45 at a $3 cap), so a percentage alone is too
             # little at a small cap: reserve the larger of the two, but never more than 60% of the cap.
             reserve = min(max(self.usd_cap * self.report_reserve, self.report_reserve_floor_usd), self.usd_cap * 0.6)
-            if self.report_budget_usd is not None:        # the owner's budget decides what research leaves behind
+            if self.dynamic_reserve:                      # the projection decides; this limit is only a backstop
+                reserve = min(max(self.usd_cap * DYNAMIC_BACKSTOP_SHARE, 0.05), self.usd_cap * 0.6)
+            elif self.report_budget_usd is not None:      # the owner's budget decides what research leaves behind
                 reserve = min(self.report_budget_usd, self.usd_cap * 0.6)
             usd_research = round(self.usd_cap - reserve, 6)
         return {"usd_cap": self.usd_cap, "usd_research_limit": usd_research,
-                "report_budget_usd": self.report_budget_usd,
+                "report_budget_usd": self.report_budget_usd, "dynamic_reserve": self.dynamic_reserve,
                 "plan_window_max": self.plan_window_max,
                 "plan_window_research_limit": round(self.plan_window_max - self.window_reserve, 6)}
 
@@ -123,6 +134,33 @@ class Governor:
     def project_report_cost(self, model_id: Optional[str], input_tokens: float, output_tokens: float) -> float:
         return REPORT_COST_MARGIN * self.unit_price(model_id) * (input_tokens + OUTPUT_PRICE_RATIO * output_tokens)
 
+    def dynamic_reserve_check(self, min_report_cost: float) -> Optional[str]:
+        """Should research stop now? Returns the reason, or None to carry on.
+
+        Stops when ``spent + next round + the cheapest useful report >= usd_cap``. The next round is what the last
+        one cost (the spend since the previous check), or a small default before any round was measured. The owner's
+        ``report_budget_usd`` caps the report term."""
+        if not self.dynamic_reserve or self.usd_cap is None:
+            return None
+        with self._lock:
+            spent = self.cost
+            if self._last_check_cost is None:
+                self._round_cost = self.usd_cap * FIRST_ROUND_ALLOWANCE
+            elif spent > self._last_check_cost:
+                self._round_cost = spent - self._last_check_cost
+            self._last_check_cost = spent
+            report = float(min_report_cost)
+            if self.report_budget_usd is not None:
+                report = min(report, self.report_budget_usd)
+            need = spent + self._round_cost + report
+            stop = need >= self.usd_cap
+            self.reserve_check = {"spent_usd": round(spent, 4), "next_round_usd": round(self._round_cost, 4),
+                                  "report_usd": round(report, 4), "cap_usd": self.usd_cap, "stopped": stop}
+            if not stop:
+                return None
+            return (f"spent ${spent:.2f} + next round about ${self._round_cost:.2f} + the cheapest useful report "
+                    f"about ${report:.2f} reaches the ${self.usd_cap:.2f} cap")
+
     def report_estimator(self, model_id: Optional[str]) -> "ReportEstimator":
         return ReportEstimator(self, model_id)
 
@@ -157,7 +195,8 @@ class Governor:
                     "util_first": dict(self.util_first), "stopped": self.stopped, "stop_phase": self.stop_phase, "hooks_seen": self.hooks_seen,
                     "by_model": {k: dict(v) for k, v in self.by_model.items()},
                     "by_phase": {k: dict(v) for k, v in self.by_phase.items()}, "limits": self.limits(),
-                    "report_plan": dict(self.report_plan) if self.report_plan else None}
+                    "report_plan": dict(self.report_plan) if self.report_plan else None,
+                    "reserve_check": dict(self.reserve_check) if self.reserve_check else None}
 
     # concurrency gate (thread-safe, loop-agnostic)
     def acquire(self) -> None:
@@ -185,3 +224,8 @@ class ReportEstimator:
 
     def record(self, plan: dict) -> None:
         self._g.report_plan = dict(plan)
+
+    def reserve_stop(self, fixed_chars: int, source_sizes) -> Optional[str]:
+        """Dynamic reserve: the reason research should stop now (spend + next round + cheapest useful report >= cap)."""
+        from deep_research.report_budget import minimal_report_cost
+        return self._g.dynamic_reserve_check(minimal_report_cost(self.project, fixed_chars, source_sizes))

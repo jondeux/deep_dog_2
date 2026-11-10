@@ -205,6 +205,7 @@ _STOP_TEXT = {
     "plan_limit_reached": "the plan's own usage limit was reached",
     "search_unavailable": "the search backend kept failing",
     "report_budget": "the final report would cost more than its budget",
+    "report_reserve": "the rest of the cost cap is kept for writing the final report",
 }
 
 
@@ -250,6 +251,56 @@ def _message_chars(msgs) -> tuple:
     tools = sum(len(json.dumps(m.tool_calls, ensure_ascii=False, default=str))
                 for m in msgs if getattr(m, "tool_calls", None))
     return content, reasoning, tools
+
+
+_NO_SOURCE_TEXT = "(No additional source text — the sources are already covered in the research findings above.)"
+
+
+def _registry_block(final_registry: list) -> str:
+    lines = []
+    for entry in final_registry:
+        line = f"[{entry.get('code') or ''}] {entry.get('title') or 'Untitled'} ({entry.get('url') or ''})"
+        if entry.get("ref"):
+            line += f"\n    Relevance: {entry['ref']}"
+        lines.append(line)
+    return "\n".join(lines) if lines else "(no sources available)"
+
+
+def _write_history(state: dict) -> list:
+    """The supervisor's history as the final-report call sends it. Its trailing decision message (e.g.
+    ResearchComplete, or a tool call that never got a result) is an AIMessage with tool_calls; the API rejects an
+    assistant tool_calls message with no matching tool messages after it, so that decision is dropped."""
+    history = list(state.get("supervisor_messages", []))
+    if history and isinstance(history[-1], AIMessage) and getattr(history[-1], "tool_calls", None):
+        history = history[:-1]
+    return history
+
+
+def _write_instruction(runtime, state: dict, registry_block: str, curated_text: str) -> str:
+    return runtime.prompts.get("final_report_write_prompt", "").format(
+        source_registry_block=registry_block,
+        curated_full_text=curated_text,
+        target_language=state.get("target_language") or runtime.config.target_language_fallback,
+        date=get_today_str(),
+    )
+
+
+def _report_footprint(state: dict, runtime) -> tuple:
+    """(characters sent besides source text, characters of text each source would add) for the final-report call."""
+    final_registry = build_final_registry(state.get("curated_sources", []) or [], state.get("source_registry", []) or [])
+    sizes = [len((e.get("full_text") or "").strip()) for e in final_registry]
+    fixed = sum(_message_chars([SystemMessage(content=_build_supervisor_system_message(state))] + _write_history(state))) \
+        + len(_write_instruction(runtime, state, _registry_block(final_registry), _NO_SOURCE_TEXT))
+    return fixed, [n for n in sizes if n]
+
+
+def _dynamic_reserve_stop(state: dict, runtime):
+    """Why research should stop now to keep room for the final report (dynamic reserve), or None."""
+    estimator = _report_cost_estimator(runtime.models, getattr(_final_report_writer_model(), "model_id", None))
+    if estimator is None:
+        return None
+    fixed, sizes = _report_footprint(state, runtime)
+    return estimator.reserve_stop(fixed, sizes)
 
 
 def _digest_report(state: dict, final_registry: list, reason: str) -> str:
@@ -442,6 +493,17 @@ async def supervisor(state: SupervisorState) -> Command[Literal["supervisor_tool
                            update={"stopped_early": "search_unavailable",
                                    "stop_elapsed_minutes": round(elapsed_minutes, 3)})
         raise SearchBackendUnavailable(unavailable)
+
+    # Dynamic reserve: stop researching when spend + the next round + the cheapest useful report reaches the cap.
+    if _has_research_findings(state, [], []):
+        reserve_stop = _dynamic_reserve_stop(state, runtime)
+        if reserve_stop:
+            logger.warning("Dynamic reserve — writing the final report from the findings so far: %s", reserve_stop)
+            print(f"\n{Colors.YELLOW}[Cost reserve] {reserve_stop}. Writing the final report from the findings "
+                  f"gathered so far.{Colors.RESET}", flush=True)
+            return Command(goto="write_final_report",
+                           update={"stopped_early": "report_reserve",
+                                   "stop_elapsed_minutes": round(elapsed_minutes, 3)})
 
     system_message = _build_supervisor_system_message(state)
 
@@ -1006,17 +1068,7 @@ async def write_final_report(state: SupervisorState) -> dict:
     _emit(_events.REPORT_STARTED, phase="report", agent="final_report_writer",
           source_count=len(final_registry), report_kind="final")
 
-    registry_lines = []
-    for entry in final_registry:
-        code = entry.get("code") or ""
-        title = entry.get("title") or "Untitled"
-        url = entry.get("url") or ""
-        ref = entry.get("ref") or ""
-        line = f"[{code}] {title} ({url})"
-        if ref:
-            line += f"\n    Relevance: {ref}"
-        registry_lines.append(line)
-    registry_block = "\n".join(registry_lines) if registry_lines else "(no sources available)"
+    registry_block = _registry_block(final_registry)
 
     source_texts = [(entry, (entry.get("full_text") or "").strip()) for entry in final_registry]
     source_texts = [(entry, text) for entry, text in source_texts if text]
@@ -1028,19 +1080,12 @@ async def write_final_report(state: SupervisorState) -> dict:
             kept = text if limit is None else trim_text(text, limit)
             if kept:
                 parts.append(f"[{entry.get('code')}] {entry.get('title') or 'Untitled'} ({entry.get('url') or ''})\n{kept}")
-        return ("\n\n---\n\n".join(parts) if parts
-                else "(No additional source text — the sources are already covered in the research findings above.)")
+        return "\n\n---\n\n".join(parts) if parts else _NO_SOURCE_TEXT
 
     system_message = _build_supervisor_system_message(state)
-    final_report_write_prompt = runtime.prompts.get("final_report_write_prompt", "")
 
     def build_instruction(curated_text):
-        return final_report_write_prompt.format(
-            source_registry_block=registry_block,
-            curated_full_text=curated_text,
-            target_language=state.get("target_language") or cfg.target_language_fallback,
-            date=get_today_str(),
-        )
+        return _write_instruction(runtime, state, registry_block, curated_text)
 
     write_instruction = build_instruction(curated_block())
 
@@ -1049,9 +1094,7 @@ async def write_final_report(state: SupervisorState) -> dict:
     # with tool_calls. The API rejects an assistant tool_calls message that
     # isn't followed by matching tool messages, so drop that trailing decision
     # before assembling the write conversation.
-    history = list(state.get("supervisor_messages", []))
-    if history and isinstance(history[-1], AIMessage) and getattr(history[-1], "tool_calls", None):
-        history = history[:-1]
+    history = _write_history(state)
 
     messages = [SystemMessage(content=system_message)] + history
     messages.append(HumanMessage(content=write_instruction))
