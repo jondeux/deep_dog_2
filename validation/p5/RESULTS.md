@@ -38,6 +38,24 @@ Economy = sonnet-5.5 high (supervisor, draft, final writer), haiku-5.5 high (sub
   file records cost by phase (`by_phase`), so the next run measures the reserve directly. The 25 % USD and 0.1 window reserves are still unmeasured guesses.
 - **Quality is not measured.** Only the structure of the report was checked (citations resolve, sources listed). No facts were verified, and there is no
   benchmark comparison.
-- **Resume was not run live.** The window has not reset, and the $0.46 left of the approved cap would not cover a resumed segment (the supervisor call alone
-  carries about 60k tokens of history). A live resume needs a window reset and a new spend approval.
+- **Resume was not run live at this point.** It was, the next day: see the last section.
 - One run, one question, one preset. No variance, no comparison with the Exa configuration.
+
+## Live resume of `live1` (2026-11-10, owner-approved, `--resume live1 --usd-cap 3.00`)
+Usage file: `live1_resume_usage.json`. All **verified** from the run's own output unless marked.
+| | |
+|---|---|
+| Restore | Log: "Resuming run live1 (stopped by plan_window_guard, 14.399 research minutes in)". The first supervisor line read "Iteration 6 \| 14.4 min elapsed": the iteration count and research clock continued, scoping was not repeated |
+| Outcome | `completed`, no further stop; no new resume file (a normal finish saves nothing, `live1.json` unchanged) |
+| Cost | $0.4283 over 2 calls (both sonnet-5.5): one supervisor call $0.2949, then the final-report call **$0.1333** |
+| Time | 121 s |
+| Window | five-hour 2 % at the end, **0 % at the first call** (window had reset); seven-day 19 %, 18 % at the first call |
+| Report | 32,890 characters, 53 distinct citations, Sources section, from the restored history of 28 messages |
+
+What this settles and does not:
+- **Resume works live**: save on a real stop, load in a new process, continue clock and iteration count, finish with a report.
+- **Final-report call cost: $0.13 once, on a 62k-token history.** The 25 % USD reserve of a $3 cap is $0.75, so it looks generous for sonnet-5.5.
+  One data point, one preset (not opus, not a larger history): not a basis for lowering it yet.
+- **Window baseline**: this run started from 0 %, and two sonnet calls ($0.43) used 2 %. That is about 5 % per dollar, so $2.54 would be roughly 12 %, not 70 %.
+  **Inferred:** the 70 % of the first run was mostly use of the shared plan by other work before and during it. Rates vary by model mix, so treat it as a rough check.
+- Not tested: a resume that itself stops again live (chained stop is covered by the free test only).

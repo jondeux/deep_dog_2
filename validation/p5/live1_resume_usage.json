@@ -1,0 +1,46 @@
+{
+  "thread_id": "live1-r1",
+  "status": "completed",
+  "stopped_early": null,
+  "usage": {
+    "calls": 2,
+    "est_cost_usd": 0.428261,
+    "util": {
+      "five_hour": 0.02,
+      "seven_day": 0.19
+    },
+    "util_first": {
+      "five_hour": 0,
+      "seven_day": 0.18
+    },
+    "stopped": null,
+    "stop_phase": null,
+    "hooks_seen": 0,
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "calls": 2,
+        "cost": 0.428261,
+        "input_tokens": 172438,
+        "output_tokens": 16529
+      }
+    },
+    "by_phase": {
+      "research": {
+        "calls": 1,
+        "cost": 0.294932
+      },
+      "report": {
+        "calls": 1,
+        "cost": 0.133329
+      }
+    },
+    "limits": {
+      "usd_cap": 3.0,
+      "usd_research_limit": 2.25,
+      "plan_window_max": 0.8,
+      "plan_window_research_limit": 0.7
+    }
+  },
+  "elapsed_seconds": 121.38,
+  "report_file": "outputs/research_2026-11-09_23-58-58_bxn.md"
+}

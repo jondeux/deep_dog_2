@@ -25,7 +25,7 @@ question and the findings; `DEEPDOG_MEMORY_DIR` moves the folder, and the tests 
 ## Status
 - Verified by free tests on the fake `claude` binary (tests/test_claude_code_resume.py, 13 tests, 5 mutants caught): save on
   stop, JSON round trip, history restored, clock and iteration count continue, chained stops, refusal of bad ids and versions.
-- Verified live (2026-11-09, `live1`): a real stop saved a resume file that loads and restores offline. Not verified live: running `--resume` itself (needs a window reset and a new spend approval).
+- Verified live (2026-11-09/10, `live1`): a real stop saved a resume file, and `--resume live1` in a new process continued the clock (14.4 min) and iteration count (6) and finished with a report. Not verified live: a resumed run that stops again (free test only).
 - Not built: waiting for the window reset automatically (`rate_limit_event` carries the reset time; the adapter ignores it).
 
 ## Measurements to fill in from live runs
@@ -33,3 +33,4 @@ Facts only, one line each with date and run id. Until then the reserve sizes (`c
 `claude_code_window_reserve` 0.10) are guesses.
 - 2026-11-09, run `live1` (economy, $3 cap, default size): $2.5382 over 133 calls in 966 s; stopped by the plan-window guard at 14.4 of 15 research minutes (iteration 5 of 30); report synthesised, 37,480 chars, 52 citations; plan window ended at five-hour 70 % / seven-day 18 %. Start of the window was not recorded. Details: `validation/p5/RESULTS.md`.
 - Since that run the usage file also records `util_first` (window at the first call) and `by_phase` (research vs report cost). The next live run sizes the report reserve from `by_phase`.
+- 2026-11-10, `--resume live1` (cap $3): $0.4283 over 2 calls in 121 s; the final-report call cost $0.1333 (62k-token history, sonnet-5.5); window 0 % at the first call, 2 % at the end; report 32,890 chars, 53 citations. Details: `validation/p5/RESULTS.md`.
