@@ -13,8 +13,11 @@ Python 3.11+ multi-agent research engine (LangGraph) that turns a question into 
 - Run a research job: `python run_research.py --prompt "..."` (needs `.env`, see `.env.example`)
 - Run on the Claude plan (no provider keys): `python run_research.py --prompt "..." --preset economy` (also `benchmark`, `custom`, `testing-framework`; `--list-presets`; `--search claude|exa|tavily|both`)
 - Claude-plan run controls: `--supervisor-model/--supervisor-effort` (same for `--draft-`, `--subagent-`), `--usd-cap`, `--report-budget USD`, `--static-reserve`, `--plan-window-max`, `--no-page-reader`, `--page-reads N`. The run prints its usage and writes `usage_<ts>.json`.
-- Every `RunConfig` field is a switch: named ones (`--time-max`, `--agents`, `--parallel-research`, `--no-trace`, ... see `python run_research.py --help`), `--set FIELD=VALUE`, `--config run.json`; `--show-config` prints the effective settings without spending. The table lives in `deep_research/cli_options.py`; the manual `docs/DEEP_DOG_RESEARCH_MANUAL.md` embeds it (`python -m deep_research.cli_options docs/DEEP_DOG_RESEARCH_MANUAL.md` regenerates it; a test checks it).
-- Third-party models by role: `--supervisor-model deepinfra:<id>` (also `openrouter:`, `together:`, `fireworks:`), keys from the environment only. Their tokens are metered (`deep_research/providers/hosted_meter.py`) and count against `--usd-cap`; `--price MODEL=IN/OUT` sets a price the provider does not publish.
+- Every `RunConfig` field is a switch: named ones (`--time-max`, `--agents`, `--no-trace`, ... see `python run_research.py --help`), `--set FIELD=VALUE`, `--config run.json`.
+- `--show-config` prints the effective settings without spending. The switch table lives in `deep_research/cli_options.py`.
+- The manual `docs/DEEP_DOG_RESEARCH_MANUAL.md` embeds that table; regenerate it with `python -m deep_research.cli_options docs/DEEP_DOG_RESEARCH_MANUAL.md` (a test checks it).
+- Third-party models by role: `--supervisor-model deepinfra:<id>` (also `openrouter:`, `together:`, `fireworks:`); keys come from the environment only.
+- Their tokens are metered (`deep_research/providers/hosted_meter.py`) and count against `--usd-cap`; `--price MODEL=IN/OUT` sets a price the provider does not publish.
 - `search_failure_limit` (`RunConfig`, default 6, 0 = off) stops a run whose Exa or Tavily searches keep failing.
 - Continue a run a usage cap stopped: `python run_research.py --resume <id>` (state in `deep-research-memory/`, see `claude/memory/deep-research-memory.md`).
 - Run the web UI: `python webui/app.py` (127.0.0.1:7860; honours `GRADIO_SERVER_NAME` / `GRADIO_SERVER_PORT`)
@@ -89,6 +92,8 @@ No linter or type checker is configured; do not add one unasked.
 ## Learned
 
 <!-- Approved, dated entries only. -->
+- [2026-11-11] Post a plan first, and make no edits or builds until the user says "go". Why: the owner's standing instruction (2026-10-28), "DO NOT EXECUTE ANY ACTION OR BUILD ANYTHING UNTIL THE USER GIVES YOU THE GO-AHEAD!"; it existed only in the memory log, which is no longer committed.
+- [2026-11-11] Do not set up the LangSmith CLI. Why: the owner's standing instruction, carried over from the memory log; tracing stays opt-in through `RunConfig.langsmith_tracing`.
 
 <!-- agent-memory:start -->
 ## Memory (agent-memory)

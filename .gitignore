@@ -59,3 +59,9 @@ dist/
 
 # built plugin packages (rebuild with scripts/build_plugin.py)
 skill-export/
+
+# agent-memory: the log is local to each container and its auto-extracted rows are not reviewed, so it is not committed.
+# Standing rules live in AGENTS.md. (.memory/config.json and .memory/bin/ stay tracked.)
+.memory/MEMORY.md
+.memory/log/memories.jsonl
+.memory/log/decisions.jsonl
