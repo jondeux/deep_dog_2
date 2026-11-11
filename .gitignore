@@ -56,3 +56,6 @@ dist/
 .memory/**/*.lock
 .memory/bin/**/__pycache__/
 .memory/log/state.json
+
+# built plugin packages (rebuild with scripts/build_plugin.py)
+skill-export/
